@@ -11,10 +11,6 @@ const placeIds   = ["6",  "7",  "8",  "9"]; // 1~4구장 place id
 const TARGET_WEEKDAYS = [1, 4, 5]; // 월, 목, 금
 const WEEKS_AHEAD = 4;
 
-// 연속 조건 대상 회차/시간
-const TARGET_SESSIONS = ["14회", "15회", "16회"]; // 14·15·16회
-const TARGET_START_HOURS = [19, 20, 21];          // 19~21시 시작
-
 // ===== 날짜 유틸 =====
 
 function formatDate(d) {
@@ -66,34 +62,10 @@ function buildUrl(date, placeIndex) {
   return `https://www.bnfmc.or.kr/reservation/www/9?facilities_type=T&base_date=${date}&rent_type=1001&center=NAMGUSPORTS02&part=${part}&place=${place}#regist_list`;
 }
 
-// ===== Puppeteer 유틸 =====
+// ===== Puppeteer에서 한 날짜+구장 처리 =====
 
-async function preparePage(browser) {
-  const page = await browser.newPage();
-
-  // 이미지 resource만 차단 (CSS/JS는 그대로)
-  await page.setRequestInterception(true);
-  page.on("request", (req) => {
-    if (req.resourceType() === "image") {
-      req.abort();
-    } else {
-      req.continue();
-    }
-  });
-
-  await page.setUserAgent(
-    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
-  );
-
-  return page;
-}
-
-// ===== 한 날짜+구장 처리: "단일 슬롯"만 수집 =====
-//
-// 14·15·16회에 해당하는 예약가능 슬롯만 전부 모은 뒤,
-// 연속 2시간(2회 연속) 조건은 나중에 한 번에 적용한다.
-
-async function collectSingleSlotsForPage(page, url) {
+// 14·15·16회 예약가능 슬롯을 모두 가져온 뒤, 연속 2회 이상만 골라서 반환
+async function checkPageForSlots(page, url) {
   console.log(`    [브라우저] 페이지 로딩: ${url}`);
 
   await page.goto(url, {
@@ -103,7 +75,7 @@ async function collectSingleSlotsForPage(page, url) {
 
   const rawSlots = await page.evaluate(() => {
     const TARGET_START_HOURS = [19, 20, 21];      // 19~21시 시작
-    const TARGET_SESSIONS = ["14회", "15회", "16회"]; // 14·15·16회
+    const TARGET_SESSIONS = ["14회", "15회", "16회"]; // 17회 제외
     const result = [];
 
     const tables = Array.from(document.querySelectorAll("table"));
@@ -178,54 +150,40 @@ async function collectSingleSlotsForPage(page, url) {
     `    [브라우저] 14·15·16회(19~21시) 예약가능 슬롯 수(단일): ${rawSlots.length}`
   );
 
-  return rawSlots;
-}
-
-// ===== 모든 단일 슬롯 모은 뒤 "연속 2시간" 조건 적용 =====
-
-function applyTwoHourRule(allAlerts) {
+  // === 여기서 연속 2시간(최소 2회 연속) 조건 적용 ===
+  // 세션을 회차 번호 기준으로 정렬 후, 연속 구간만 남긴다.
   const sessionOrder = { "14회": 14, "15회": 15, "16회": 16 };
-  const finalAlerts = [];
+  const sorted = rawSlots
+    .slice()
+    .sort((a, b) => sessionOrder[a.session] - sessionOrder[b.session]);
 
-  for (const alert of allAlerts) {
-    const { slots } = alert;
-    if (!slots || slots.length === 0) continue;
+  const usedSessions = new Set();
+  const finalSlots = [];
 
-    const sorted = slots
-      .slice()
-      .sort((a, b) => sessionOrder[a.session] - sessionOrder[b.session]);
+  // 14-15, 15-16 연속 구간 탐색
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const cur = sorted[i];
+    const next = sorted[i + 1];
+    const curNo = sessionOrder[cur.session];
+    const nextNo = sessionOrder[next.session];
 
-    const usedSessions = new Set();
-    const selectedSlots = [];
-
-    // 14-15, 15-16 연속 구간 탐색
-    for (let i = 0; i < sorted.length - 1; i++) {
-      const cur = sorted[i];
-      const next = sorted[i + 1];
-      const curNo = sessionOrder[cur.session];
-      const nextNo = sessionOrder[next.session];
-
-      if (nextNo === curNo + 1) {
-        if (!usedSessions.has(cur.session)) {
-          selectedSlots.push(cur);
-          usedSessions.add(cur.session);
-        }
-        if (!usedSessions.has(next.session)) {
-          selectedSlots.push(next);
-          usedSessions.add(next.session);
-        }
+    if (nextNo === curNo + 1) {
+      // 연속 2회 이상 확보
+      if (!usedSessions.has(cur.session)) {
+        finalSlots.push(cur);
+        usedSessions.add(cur.session);
       }
-    }
-
-    if (selectedSlots.length > 0) {
-      finalAlerts.push({
-        ...alert,
-        slots: selectedSlots,
-      });
+      if (!usedSessions.has(next.session)) {
+        finalSlots.push(next);
+        usedSessions.add(next.session);
+      }
     }
   }
 
-  return finalAlerts;
+  console.log(
+    `    [브라우저] 연속 2시간 이상 조건 충족 슬롯 수: ${finalSlots.length}`
+  );
+  return finalSlots;
 }
 
 // ===== 메인 =====
@@ -241,7 +199,7 @@ async function main() {
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
 
-  const singleAlerts = [];
+  const alerts = [];
 
   try {
     for (const date of dates) {
@@ -249,18 +207,22 @@ async function main() {
 
       // 이 날짜에 대해 1~4구장을 동시에 처리
       const tasks = placeNames.map(async (_name, pIdx) => {
-        const page = await preparePage(browser);
+        const page = await browser.newPage();
         try {
           const url = buildUrl(date, pIdx);
           console.log(`  [구장] ${placeNames[pIdx]} URL: ${url}`);
 
-          const slots = await collectSingleSlotsForPage(page, url);
+          await page.setUserAgent(
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
+          );
+
+          const slots = await checkPageForSlots(page, url);
           if (slots.length > 0) {
-            singleAlerts.push({
+            alerts.push({
               date,
               placeIndex: pIdx,
               placeName: placeNames[pIdx],
-              slots, // 여기엔 "단일 슬롯"이 전부 들어감
+              slots,
             });
           }
         } catch (e) {
@@ -278,9 +240,6 @@ async function main() {
   } finally {
     await browser.close();
   }
-
-  // 여기서 한 번만 연속 2시간 조건 적용
-  const alerts = applyTwoHourRule(singleAlerts);
 
   let available = false;
   let message = "";
