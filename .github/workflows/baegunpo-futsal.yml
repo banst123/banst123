@@ -21,7 +21,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'     # npm 패시 활용으로 실행 속도 향상
+          # cache: 'npm'     # npm 패시 활용으로 실행 속도 향상
 
       - name: 의존성 및 Puppeteer 브라우저 설치
         run: |
