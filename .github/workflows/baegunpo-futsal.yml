@@ -17,8 +17,9 @@ jobs:
           node-version: 20
 
       - name: Step 3 - Install dependencies
-        run: npm install
-
+        run: |
+          npm install
+          npm install puppeteer
       - name: Step 4 - Check futsal availability
         id: check
         run: npm run check:futsal
