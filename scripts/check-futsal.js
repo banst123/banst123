@@ -67,7 +67,7 @@ function buildUrl(date, placeIndex) {
 // ===== Puppeteer에서 한 날짜+구장 처리 =====
 
 async function checkPageForSlots(page, url) {
-  console.log(`  [브라우저] 페이지 로딩: ${url}`);
+  console.log(`    [브라우저] 페이지 로딩: ${url}`);
 
   await page.goto(url, {
     waitUntil: "networkidle2",
@@ -142,7 +142,7 @@ async function checkPageForSlots(page, url) {
   });
 
   console.log(
-    `  [브라우저] 19~22시 시작 & 예약가능 슬롯 수: ${slots.length}`
+    `    [브라우저] 19~22시 시작 & 예약가능 슬롯 수: ${slots.length}`
   );
   return slots;
 }
@@ -160,22 +160,23 @@ async function main() {
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
 
-  const page = await browser.newPage();
-  await page.setUserAgent(
-    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
-  );
-
   const alerts = [];
 
   try {
     for (const date of dates) {
       console.log(`\n[날짜] ${date} (${formatDatePretty(date)}) 처리 시작`);
 
-      for (let pIdx = 0; pIdx < placeNames.length; pIdx++) {
-        const url = buildUrl(date, pIdx);
-        console.log(`  [구장] ${placeNames[pIdx]} URL: ${url}`);
-
+      // 이 날짜에 대해 1~4구장을 동시에 처리
+      const tasks = placeNames.map(async (_name, pIdx) => {
+        const page = await browser.newPage();
         try {
+          const url = buildUrl(date, pIdx);
+          console.log(`  [구장] ${placeNames[pIdx]} URL: ${url}`);
+
+          await page.setUserAgent(
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
+          );
+
           const slots = await checkPageForSlots(page, url);
           if (slots.length > 0) {
             alerts.push({
@@ -187,11 +188,16 @@ async function main() {
           }
         } catch (e) {
           console.error(
-            `  ! Puppeteer evaluate 에러 (${date} ${placeNames[pIdx]}):`,
+            `  ! Puppeteer 에러 (${date} ${placeNames[pIdx]}):`,
             e.message
           );
+        } finally {
+          await page.close();
         }
-      }
+      });
+
+      // 이 날짜의 4개 구장을 병렬 실행
+      await Promise.all(tasks);
     }
   } finally {
     await browser.close();
