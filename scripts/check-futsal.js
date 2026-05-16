@@ -4,18 +4,12 @@ import { JSDOM } from "jsdom";
 // ===== 설정 영역 (테스트용) =====
 
 // 테스트: 풋살2구장만 모니터링
-// 기존 배열: ["인조잔디(구)", "인조잔디(신)", "풋살1구장", "풋살2구장", "풋살3구장", "풋살4구장"]
-// placeParts = ["04", "14", "05", "05", "05", "05"]
-// placeIds   = ["2", "26", "6", "7", "8", "9"]
-
 const placeNames = ["풋살2구장"];
 const placeParts = ["05"];
 const placeIds   = ["7"];
 
-// 19시, 20시, 21시 (각 1시간) 세션 ID
-// 안드로이드 로직: 시작시간 = id + 6 이라면,
-// 19시 -> 19-6=13, 20시 -> 14, 21시 -> 15
-const targetSessionIds = [13, 14, 15];
+// 테스트: checkbox_time_1 ~ 17 전체 스캔
+const targetSessionIds = Array.from({ length: 17 }, (_, i) => i + 1);
 
 // 날짜 범위: "오늘+1일"부터 "오늘+7일"까지만 (총 7일)
 function formatDate(d) {
@@ -82,7 +76,7 @@ async function fetchHtml(url) {
   }
 }
 
-// HTML에서 checkbox_time_13/14/15의 disabled/checked를 직접 확인
+// HTML에서 checkbox_time_1~17의 disabled/checked를 모두 확인
 function parseAvailability(html) {
   const dom = new JSDOM(html);
   const document = dom.window.document;
@@ -97,7 +91,6 @@ function parseAvailability(html) {
       continue;
     }
 
-    // 체크박스가 포함된 행
     const row = cb.closest("tr");
     const cells = row ? row.querySelectorAll("td") : [];
     const rawLast = cells.length > 0 ? (cells[cells.length - 1].textContent || "") : "";
@@ -135,13 +128,12 @@ function parseAvailability(html) {
 // ===== 메인 로직 =====
 
 async function main() {
-  // 오늘+1일 ~ 오늘+7일
   const dates = getNextDaysRange(1, 7);
 
-  console.log(`=== 모니터링 시작 (테스트 모드) ===`);
+  console.log(`=== 모니터링 시작 (테스트 모드: 풋살2, id 1~17) ===`);
   console.log(`날짜 범위: ${dates[0]} ~ ${dates[dates.length - 1]}`);
   console.log(`구장: ${placeNames.join(", ")}`);
-  console.log(`타겟 세션 IDs: ${targetSessionIds.join(", ")}`);
+  console.log(`체크박스 IDs: ${targetSessionIds.join(", ")}`);
 
   const alerts = [];
 
@@ -159,7 +151,7 @@ async function main() {
         const slots = parseAvailability(html);
         const availCount = slots.filter((s) => s.available).length;
         console.log(
-          `    - 타겟 세션 수: ${slots.length}, 예약가능: ${availCount}`
+          `    - 총 체크한 세션 수: ${slots.length}, 예약가능: ${availCount}`
         );
 
         const availableSlots = slots.filter((s) => s.available);
@@ -184,14 +176,14 @@ async function main() {
   if (alerts.length > 0) {
     available = true;
     const lines = [];
-    lines.push("▣ 백운포 풋살2구장 예약 가능 알림 (테스트 모드) ▣");
+    lines.push("▣ 백운포 풋살2구장 예약 가능 알림 (테스트 모드: id 1~17) ▣");
     lines.push("");
 
     for (const alert of alerts) {
       const dateTitle = formatDatePretty(alert.date);
       lines.push(`▶ ${dateTitle} ${alert.placeName}`);
       for (const s of alert.slots) {
-        lines.push(` - ${s.sessionNo}회 ${s.time}: ${s.booker}`);
+        lines.push(` - id=${s.id}, ${s.sessionNo}회 ${s.time}: ${s.booker}`);
       }
       lines.push("");
     }
@@ -200,7 +192,7 @@ async function main() {
   } else {
     available = false;
     message =
-      "현재(테스트 범위: 풋살2구장, 오늘+1~7일, 19/20/21시)에 예약 가능 슬롯이 없습니다.";
+      "현재(테스트 범위: 풋살2구장, 오늘+1~7일, id 1~17)에 예약 가능 슬롯이 없습니다.";
   }
 
   console.log("\n=== 결과 요약 ===");
