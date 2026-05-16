@@ -91,8 +91,16 @@ async function preparePage(browser) {
 }
 
 // ===== Puppeteer에서 한 날짜+구장 처리 (원시 데이터 수집) =====
+//
+// 실제 DOM 구조:
+//   <td><label>14회</label></td>
+//   <td><label>19:00~20:00</label></td>
+//   <td>예약가능</td>
+//
+// → cells[0] = "14회"
+//   cells[1] = "19:00~20:00"
+//   cells[2] = "예약가능"
 
-// 14·15·16회 중 "예약가능"인 슬롯만 수집 (연속 조건은 적용하지 않음)
 async function collectSlotsForPage(page, url) {
   console.log(`    [브라우저] 페이지 로딩: ${url}`);
 
@@ -132,26 +140,25 @@ async function collectSlotsForPage(page, url) {
         const cells = Array.from(row.querySelectorAll("th,td")).map((c) =>
           (c.innerText || "").trim()
         );
-        if (cells.length < 4) continue;
+        if (cells.length < 3) continue;
 
         // 헤더 행 건너뛰기
-        if (
-          cells[0].includes("선택") ||
-          cells[0].includes("회차") ||
-          cells[1].includes("시간")
-        ) {
+        const joined = cells.join(" ");
+        if (joined.includes("회차") && joined.includes("시간")) {
           continue;
         }
 
-        // 구조 가정: [선택, 회차, 시간, 이용금액, 예약상태, 예약자] 순 또는 유사
-        const sessionText = cells[1]; // 예: "14회"
-        const timeText = cells[2];    // 예: "19:00~20:00"
-        const statusText = cells[4] || cells[3] || "";
+        // 현재 구조 가정:
+        // cells[0] = "14회"
+        // cells[1] = "19:00~20:00"
+        // cells[2] = "예약가능" 또는 "예약완료"
+        const sessionText = cells[0];
+        const timeText = cells[1];
+        const statusText = cells[2];
 
-        const status = statusText.trim();
-
-        // 회차 필터: 14·15·16회만
-        if (!TARGET_SESSIONS.includes(sessionText)) {
+        // 회차: 공백 제거 후 14·15·16회만
+        const normalizedSession = sessionText.replace(/\s/g, "");
+        if (!TARGET_SESSIONS.includes(normalizedSession)) {
           continue;
         }
 
@@ -159,19 +166,21 @@ async function collectSlotsForPage(page, url) {
         const m = timeText.match(/^(\d{2}):\d{2}/);
         if (!m) continue;
         const startHour = parseInt(m[1], 10);
-
         if (!TARGET_START_HOURS.includes(startHour)) {
           continue;
         }
 
-        // 예약가능만 수집
-        if (status === "예약가능") {
-          result.push({
-            session: sessionText,
-            time: timeText,
-            status: status,
-          });
+        // 상태: 공백 제거 후 "예약가능"만
+        const normalizedStatus = statusText.replace(/\s/g, "");
+        if (normalizedStatus !== "예약가능") {
+          continue;
         }
+
+        result.push({
+          session: normalizedSession, // "14회", "15회", "16회"
+          time: timeText,
+          status: "예약가능",
+        });
       }
 
       return result;
