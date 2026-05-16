@@ -1,4 +1,4 @@
-name: 백운포 풋살 모니터링
+name: 백운포 풋살 모니터링 (Puppeteer)
 
 on:
   workflow_dispatch:
@@ -20,7 +20,8 @@ jobs:
         run: |
           npm install
           npm install puppeteer
-      - name: Step 4 - Check futsal availability
+
+      - name: Step 4 - Check futsal availability (Puppeteer)
         id: check
         run: npm run check:futsal
 
