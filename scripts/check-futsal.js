@@ -8,7 +8,6 @@ const placeParts = ["05", "05", "05", "05"];
 const placeIds   = ["6",  "7",  "8",  "9"]; // 1~4구장 place id
 
 // 모니터링 대상 요일: 월(1), 목(4), 금(5)
-// 기준: "내일"부터 시작해서 4주간 범위 내에서 이 요일만 선택
 const TARGET_WEEKDAYS = [1, 4, 5]; // 월, 목, 금
 const WEEKS_AHEAD = 4;
 
@@ -21,7 +20,6 @@ function formatDate(d) {
   return `${yyyy}${mm}${dd}`;
 }
 
-// yyyyMMdd -> "MM/DD(요일)" 한글 요일
 function formatDatePretty(dateStr) {
   try {
     const yyyy = parseInt(dateStr.slice(0, 4), 10);
@@ -75,7 +73,8 @@ async function checkPageForSlots(page, url) {
   });
 
   const slots = await page.evaluate(() => {
-    const TARGET_START_HOURS = [19, 20, 21, 22];
+    const TARGET_START_HOURS = [19, 20, 21];      // 19~21시 시작
+    const TARGET_SESSIONS = ["14회", "15회", "16회"]; // 17회 제외
     const result = [];
 
     const tables = Array.from(document.querySelectorAll("table"));
@@ -116,11 +115,16 @@ async function checkPageForSlots(page, url) {
       // 구조 가정: [선택, 회차, 시간, 이용금액, 예약상태, 예약자] 순 또는 유사
       const sessionText = cells[1]; // 예: "14회"
       const timeText = cells[2];    // 예: "19:00~20:00"
-      const statusText = cells[4] || cells[3] || ""; // 예약상태 위치 보정
+      const statusText = cells[4] || cells[3] || "";
 
       const status = statusText.trim();
 
-      // "19:00~20:00" 같은 형식에서 시작 시각 추출
+      // 회차 필터: 14·15·16회만
+      if (!TARGET_SESSIONS.includes(sessionText)) {
+        continue;
+      }
+
+      // 시간에서 시작 시각 추출
       const m = timeText.match(/^(\d{2}):\d{2}/);
       if (!m) continue;
       const startHour = parseInt(m[1], 10);
@@ -129,6 +133,7 @@ async function checkPageForSlots(page, url) {
         continue;
       }
 
+      // 예약가능만 수집
       if (status === "예약가능") {
         result.push({
           session: sessionText,
@@ -142,7 +147,7 @@ async function checkPageForSlots(page, url) {
   });
 
   console.log(
-    `    [브라우저] 19~22시 시작 & 예약가능 슬롯 수: ${slots.length}`
+    `    [브라우저] 14·15·16회(19~21시) & 예약가능 슬롯 수: ${slots.length}`
   );
   return slots;
 }
@@ -151,7 +156,7 @@ async function checkPageForSlots(page, url) {
 
 async function main() {
   const dates = getTargetDates(); // 내일부터 4주간, 월·목·금만
-  console.log("=== Puppeteer 기반 풋살1~4 예약 체크 시작 (월/목/금, 19~22시, 예약가능만) ===");
+  console.log("=== Puppeteer 기반 풋살1~4 예약 체크 시작 (월/목/금, 14~16회, 예약가능만) ===");
   console.log(`대상 날짜 수: ${dates.length}일`);
   console.log(`구장: ${placeNames.join(", ")}`);
 
@@ -209,7 +214,7 @@ async function main() {
   if (alerts.length > 0) {
     available = true;
     const lines = [];
-    lines.push("▣ 백운포 풋살1~4구장 예약 가능 알림 (월·목·금, 19~22시) ▣");
+    lines.push("▣ 백운포 풋살1~4구장 예약 가능 알림 (월·목·금, 14~16회/19~21시) ▣");
     lines.push("");
 
     for (const alert of alerts) {
@@ -225,7 +230,7 @@ async function main() {
   } else {
     available = false;
     message =
-      "현재(풋살1~4구장, 내일부터 4주간 월·목·금, 19~22시 시작)에 예약 가능 슬롯이 없습니다.";
+      "현재(풋살1~4구장, 내일부터 4주간 월·목·금, 14~16회/19~21시 시작)에 예약 가능 슬롯이 없습니다.";
   }
 
   console.log("\n=== 결과 요약 ===");
