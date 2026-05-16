@@ -11,12 +11,16 @@ const placeIds   = ["6",  "7",  "8",  "9"]; // 1~4구장 place id
 const TARGET_WEEKDAYS = [1, 4, 5]; // 월, 목, 금
 const WEEKS_AHEAD = 4;
 
+// 연속 조건 대상 회차/시간
+const TARGET_SESSIONS = ["14회", "15회", "16회"]; // 14·15·16회 (19~21시)
+const TARGET_START_HOURS = [19, 20, 21];          // 19, 20, 21시 시작
+
 // ===== 날짜 유틸 =====
 
 function formatDate(d) {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate() + "").padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}${mm}${dd}`;
 }
 
@@ -62,128 +66,172 @@ function buildUrl(date, placeIndex) {
   return `https://www.bnfmc.or.kr/reservation/www/9?facilities_type=T&base_date=${date}&rent_type=1001&center=NAMGUSPORTS02&part=${part}&place=${place}#regist_list`;
 }
 
-// ===== Puppeteer에서 한 날짜+구장 처리 =====
+// ===== Puppeteer 설정 유틸 =====
 
-// 14·15·16회 예약가능 슬롯을 모두 가져온 뒤, 연속 2회 이상만 골라서 반환
-async function checkPageForSlots(page, url) {
+async function preparePage(browser) {
+  const page = await browser.newPage();
+
+  // 불필요 리소스 차단 (이미지, CSS, 폰트, 미디어)
+  await page.setRequestInterception(true);
+  const blockedTypes = new Set(["image", "stylesheet", "font", "media"]);
+  page.on("request", (req) => {
+    const type = req.resourceType();
+    if (blockedTypes.has(type)) {
+      req.abort();
+    } else {
+      req.continue();
+    }
+  });
+
+  await page.setUserAgent(
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
+  );
+
+  return page;
+}
+
+// ===== Puppeteer에서 한 날짜+구장 처리 (원시 데이터 수집) =====
+
+// 14·15·16회 중 "예약가능"인 슬롯만 수집 (연속 조건은 적용하지 않음)
+async function collectSlotsForPage(page, url) {
   console.log(`    [브라우저] 페이지 로딩: ${url}`);
 
   await page.goto(url, {
-    waitUntil: "networkidle2",
+    waitUntil: "domcontentloaded",
     timeout: 60000,
   });
 
-  const rawSlots = await page.evaluate(() => {
-    const TARGET_START_HOURS = [19, 20, 21];      // 19~21시 시작
-    const TARGET_SESSIONS = ["14회", "15회", "16회"]; // 17회 제외
-    const result = [];
+  // 예약 테이블이 렌더될 때까지 대기 (최대 10초)
+  await page.waitForSelector("table", { timeout: 10000 }).catch(() => {});
 
-    const tables = Array.from(document.querySelectorAll("table"));
-    let targetTable = null;
-    for (const tbl of tables) {
-      const headerText = tbl.innerText || "";
-      if (
-        headerText.includes("회차") &&
-        headerText.includes("시간") &&
-        headerText.includes("예약상태")
-      ) {
-        targetTable = tbl;
-        break;
+  const rawSlots = await page.evaluate(
+    (TARGET_SESSIONS, TARGET_START_HOURS) => {
+      const result = [];
+
+      const tables = Array.from(document.querySelectorAll("table"));
+      let targetTable = null;
+      for (const tbl of tables) {
+        const headerText = tbl.innerText || "";
+        if (
+          headerText.includes("회차") &&
+          headerText.includes("시간") &&
+          headerText.includes("예약상태")
+        ) {
+          targetTable = tbl;
+          break;
+        }
       }
-    }
 
-    if (!targetTable) {
-      console.log("[eval] 예약 테이블을 찾지 못함");
+      if (!targetTable) {
+        console.log("[eval] 예약 테이블을 찾지 못함");
+        return result;
+      }
+
+      const rows = Array.from(targetTable.querySelectorAll("tr"));
+      for (const row of rows) {
+        const cells = Array.from(row.querySelectorAll("th,td")).map((c) =>
+          (c.innerText || "").trim()
+        );
+        if (cells.length < 4) continue;
+
+        // 헤더 행 건너뛰기
+        if (
+          cells[0].includes("선택") ||
+          cells[0].includes("회차") ||
+          cells[1].includes("시간")
+        ) {
+          continue;
+        }
+
+        // 구조 가정: [선택, 회차, 시간, 이용금액, 예약상태, 예약자] 순 또는 유사
+        const sessionText = cells[1]; // 예: "14회"
+        const timeText = cells[2];    // 예: "19:00~20:00"
+        const statusText = cells[4] || cells[3] || "";
+
+        const status = statusText.trim();
+
+        // 회차 필터: 14·15·16회만
+        if (!TARGET_SESSIONS.includes(sessionText)) {
+          continue;
+        }
+
+        // 시간에서 시작 시각 추출
+        const m = timeText.match(/^(\d{2}):\d{2}/);
+        if (!m) continue;
+        const startHour = parseInt(m[1], 10);
+
+        if (!TARGET_START_HOURS.includes(startHour)) {
+          continue;
+        }
+
+        // 예약가능만 수집
+        if (status === "예약가능") {
+          result.push({
+            session: sessionText,
+            time: timeText,
+            status: status,
+          });
+        }
+      }
+
       return result;
-    }
-
-    const rows = Array.from(targetTable.querySelectorAll("tr"));
-    for (const row of rows) {
-      const cells = Array.from(row.querySelectorAll("th,td")).map((c) =>
-        (c.innerText || "").trim()
-      );
-      if (cells.length < 4) continue;
-
-      // 헤더 행 건너뛰기
-      if (
-        cells[0].includes("선택") ||
-        cells[0].includes("회차") ||
-        cells[1].includes("시간")
-      ) {
-        continue;
-      }
-
-      const sessionText = cells[1]; // 예: "14회"
-      const timeText = cells[2];    // 예: "19:00~20:00"
-      const statusText = cells[4] || cells[3] || "";
-
-      const status = statusText.trim();
-
-      // 회차 필터: 14·15·16회만
-      if (!TARGET_SESSIONS.includes(sessionText)) {
-        continue;
-      }
-
-      // 시간에서 시작 시각 추출
-      const m = timeText.match(/^(\d{2}):\d{2}/);
-      if (!m) continue;
-      const startHour = parseInt(m[1], 10);
-
-      if (!TARGET_START_HOURS.includes(startHour)) {
-        continue;
-      }
-
-      // 예약가능만 수집
-      if (status === "예약가능") {
-        result.push({
-          session: sessionText,
-          time: timeText,
-          status: status,
-        });
-      }
-    }
-
-    return result;
-  });
+    },
+    TARGET_SESSIONS,
+    TARGET_START_HOURS
+  );
 
   console.log(
     `    [브라우저] 14·15·16회(19~21시) 예약가능 슬롯 수(단일): ${rawSlots.length}`
   );
 
-  // === 여기서 연속 2시간(최소 2회 연속) 조건 적용 ===
-  // 세션을 회차 번호 기준으로 정렬 후, 연속 구간만 남긴다.
+  return rawSlots;
+}
+
+// ===== 연속 2시간 이상 조건 후처리 =====
+
+// rawAlerts: [{ date, placeIndex, placeName, slots: [ {session,time,status}, ... ] }, ...]
+function applyTwoHourRule(rawAlerts) {
   const sessionOrder = { "14회": 14, "15회": 15, "16회": 16 };
-  const sorted = rawSlots
-    .slice()
-    .sort((a, b) => sessionOrder[a.session] - sessionOrder[b.session]);
+  const finalAlerts = [];
 
-  const usedSessions = new Set();
-  const finalSlots = [];
+  for (const alert of rawAlerts) {
+    if (!alert.slots || alert.slots.length === 0) continue;
 
-  // 14-15, 15-16 연속 구간 탐색
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const cur = sorted[i];
-    const next = sorted[i + 1];
-    const curNo = sessionOrder[cur.session];
-    const nextNo = sessionOrder[next.session];
+    const sorted = alert.slots
+      .slice()
+      .sort((a, b) => sessionOrder[a.session] - sessionOrder[b.session]);
 
-    if (nextNo === curNo + 1) {
-      // 연속 2회 이상 확보
-      if (!usedSessions.has(cur.session)) {
-        finalSlots.push(cur);
-        usedSessions.add(cur.session);
+    const used = new Set();
+    const selected = [];
+
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const cur = sorted[i];
+      const next = sorted[i + 1];
+      const curNo = sessionOrder[cur.session];
+      const nextNo = sessionOrder[next.session];
+
+      // 회차 번호가 1 차이날 때 (14-15, 15-16)
+      if (nextNo === curNo + 1) {
+        if (!used.has(cur.session)) {
+          selected.push(cur);
+          used.add(cur.session);
+        }
+        if (!used.has(next.session)) {
+          selected.push(next);
+          used.add(next.session);
+        }
       }
-      if (!usedSessions.has(next.session)) {
-        finalSlots.push(next);
-        usedSessions.add(next.session);
-      }
+    }
+
+    if (selected.length > 0) {
+      finalAlerts.push({
+        ...alert,
+        slots: selected, // 연속 2시간 이상 조건을 만족하는 슬롯만
+      });
     }
   }
 
-  console.log(
-    `    [브라우저] 연속 2시간 이상 조건 충족 슬롯 수: ${finalSlots.length}`
-  );
-  return finalSlots;
+  return finalAlerts;
 }
 
 // ===== 메인 =====
@@ -196,10 +244,17 @@ async function main() {
 
   const browser = await puppeteer.launch({
     headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-extensions",
+      "--disable-background-networking",
+      "--mute-audio",
+    ],
   });
 
-  const alerts = [];
+  const rawAlerts = [];
 
   try {
     for (const date of dates) {
@@ -207,18 +262,14 @@ async function main() {
 
       // 이 날짜에 대해 1~4구장을 동시에 처리
       const tasks = placeNames.map(async (_name, pIdx) => {
-        const page = await browser.newPage();
+        const page = await preparePage(browser);
         try {
           const url = buildUrl(date, pIdx);
           console.log(`  [구장] ${placeNames[pIdx]} URL: ${url}`);
 
-          await page.setUserAgent(
-            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
-          );
-
-          const slots = await checkPageForSlots(page, url);
+          const slots = await collectSlotsForPage(page, url);
           if (slots.length > 0) {
-            alerts.push({
+            rawAlerts.push({
               date,
               placeIndex: pIdx,
               placeName: placeNames[pIdx],
@@ -240,6 +291,9 @@ async function main() {
   } finally {
     await browser.close();
   }
+
+  // 연속 2시간 이상 조건 한 번만 적용
+  const alerts = applyTwoHourRule(rawAlerts);
 
   let available = false;
   let message = "";
