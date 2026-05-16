@@ -1,16 +1,16 @@
 import fetch from "node-fetch";
 import { JSDOM } from "jsdom";
 
-// ===== 설정 영역 (테스트용) =====
+// ===== 설정 영역 (디버그용) =====
 
-// 테스트: 풋살2구장만 모니터링
+// 풋살2구장만 모니터링
 const placeNames = ["풋살2구장"];
 const placeParts = ["05"];
 const placeIds   = ["7"];
 
-// 테스트: checkbox_time_* 전체를 대상으로 함
-// (id 숫자를 강제로 제한하지 않고, 실제 존재하는 체크박스 전부 스캔)
-const TARGET_START_HOURS = [19, 20, 21]; // 19·20·21시 시작 슬롯만 필터
+// 시간대: 06:00 ~ 23:00 시작까지 전부 (필터를 안 걸고, 다 찍기 전용)
+const MONITOR_START_HOUR = 6;
+const MONITOR_END_HOUR   = 23;
 
 // 날짜 범위: "오늘+1일"부터 "오늘+7일"까지만 (총 7일)
 function formatDate(d) {
@@ -77,12 +77,12 @@ async function fetchHtml(url) {
   }
 }
 
-// HTML에서 모든 time 체크박스를 스캔하고, value/상태를 로그 + 19·20·21시만 반환
+// HTML에서 모든 time 체크박스를 스캔하고, 06~23시 전체 상태를 로그로 출력
 function parseAvailability(html) {
   const dom = new JSDOM(html);
   const document = dom.window.document;
 
-  // 모든 time 체크박스를 수집
+  // 모든 time 체크박스 수집
   const inputs = Array.from(
     document.querySelectorAll('input[type="checkbox"][name="time"][id^="checkbox_time_"]')
   );
@@ -96,7 +96,7 @@ function parseAvailability(html) {
 
     const valueAttr = cb.value || "";
     const parts = valueAttr.split(";");
-    // 예: "844;11회;1600;1700;1" 형태라고 가정
+    // 예: "844;11회;1600;1700;1"
     const sessionLabel = (parts[1] || "").trim(); // "11회"
     const startStr = (parts[2] || "").trim();      // "1600"
     const endStr = (parts[3] || "").trim();        // "1700"
@@ -118,15 +118,22 @@ function parseAvailability(html) {
     const cleaned = rawLast.replace(/예약가능|선택|-/g, "").trim();
     const booker = available ? "예약가능" : (cleaned || "완료");
 
+    // 06~23시 범위인지 여부만 표시 (필터는 안 걸고, 로그만 찍음)
+    const inRange =
+      !Number.isNaN(startHour) &&
+      startHour >= MONITOR_START_HOUR &&
+      startHour <= MONITOR_END_HOUR;
+
     console.log(
-      `[parse] id=${idNum}, value="${valueAttr}", session=${sessionLabel}, ` +
-        `time=${startStr}~${endStr}, startHour=${startHour}, endHour=${endHour}, ` +
+      `[parse] id=${idNum}, inRange=${inRange}, value="${valueAttr}", ` +
+        `session=${sessionLabel}, time=${startStr}~${endStr}, ` +
+        `startHour=${startHour}, endHour=${endHour}, ` +
         `disabled=${disabled}, checked=${checked}, available=${available}, ` +
         `raw="${rawLast.trim()}", cleaned="${cleaned}"`
     );
 
-    // 19·20·21시 시작 슬롯만 모니터링 대상
-    if (TARGET_START_HOURS.includes(startHour)) {
+    // 일단 06~23시 범위면 전부 slots에 넣어둠 (예약 가능/불가 관계없이)
+    if (inRange) {
       slots.push({
         id: idNum,
         sessionLabel,
@@ -146,10 +153,10 @@ function parseAvailability(html) {
 async function main() {
   const dates = getNextDaysRange(1, 7);
 
-  console.log(`=== 모니터링 시작 (테스트 모드: 풋살2, 오늘+1~7일, all checkbox_time_*) ===`);
+  console.log(`=== 모니터링 시작 (디버그 모드: 풋살2, 오늘+1~7일, 06~23시 전체 체크박스) ===`);
   console.log(`날짜 범위: ${dates[0]} ~ ${dates[dates.length - 1]}`);
   console.log(`구장: ${placeNames.join(", ")}`);
-  console.log(`타겟 시작시: ${TARGET_START_HOURS.join(", ")}시`);
+  console.log(`체크 대상 시작시: ${MONITOR_START_HOUR}시 ~ ${MONITOR_END_HOUR}시`);
 
   const alerts = [];
 
@@ -167,7 +174,7 @@ async function main() {
         const slots = parseAvailability(html);
         const availCount = slots.filter((s) => s.available).length;
         console.log(
-          `    - 타겟(19/20/21시) 슬롯 수: ${slots.length}, 예약가능: ${availCount}`
+          `    - 06~23시 범위 슬롯 수: ${slots.length}, 예약가능: ${availCount}`
         );
 
         const availableSlots = slots.filter((s) => s.available);
@@ -192,7 +199,7 @@ async function main() {
   if (alerts.length > 0) {
     available = true;
     const lines = [];
-    lines.push("▣ 백운포 풋살2구장 예약 가능 알림 (테스트 모드) ▣");
+    lines.push("▣ 백운포 풋살2구장 예약 가능 알림 (디버그 모드: 06~23시) ▣");
     lines.push("");
 
     for (const alert of alerts) {
@@ -210,7 +217,7 @@ async function main() {
   } else {
     available = false;
     message =
-      "현재(테스트 범위: 풋살2구장, 오늘+1~7일, 19/20/21시 시작)에 예약 가능 슬롯이 없습니다.";
+      "현재(디버그 범위: 풋살2구장, 오늘+1~7일, 06~23시)에서 예약 가능 슬롯이 없습니다.";
   }
 
   console.log("\n=== 결과 요약 ===");
