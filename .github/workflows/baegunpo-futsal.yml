@@ -1,38 +1,41 @@
-name: 백운포 풋살 모니터링 (Puppeteer)
+name: 백운포 풋살장 예약 모니터링
 
 on:
-  workflow_dispatch:
+  schedule:
+    - cron: '*/10 * * * *' # 10분마다 실행 (원하는 주기로 변경 가능)
+  workflow_dispatch:       # 수동 실행 버튼 활성화
 
 jobs:
-  futsal_monitor:
+  check-futsal:
     runs-on: ubuntu-latest
-
+    strategy:
+      # max-parallel: 4 # 4개 구장을 완전히 동시에 실행
+      matrix:
+        place_index: [0, 1, 2, 3] # 0=1구장, 1=2구장, 2=3구장, 3=4구장
+        
     steps:
-      - name: Step 1 - Checkout
+      - name: 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Step 2 - Setup Node.js
+      - name: Node.js 설정
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-node-version: 20
 
-      - name: Step 3 - Install dependencies
-        run: |
-          npm install
-          npm install puppeteer
+      - name: 의존성 설치
+        run: npm install puppeteer
 
-      - name: Step 4 - Check futsal availability (Puppeteer)
-        id: check
-        run: npm run check:futsal
-
-      - name: Step 5 - Send Telegram notification
-        if: steps.check.outputs.available == 'true'
-        run: |
-          echo "Telegram step started"
-          MSG="${{ steps.check.outputs.message }}"
-          curl -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-            -H "Content-Type: application/json" \
-            -d "{\"chat_id\": \"${TG_CHAT_ID}\", \"text\": \"${MSG}\"}"
+      - name: 구장별 독립 크롤링 실행
+        id: run_script
         env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          PLACE_INDEX: ${{ matrix.place_index }} # 가상 컴퓨터별로 자신의 구장 인덱스를 주입
+        run: node check-futsal.js
+
+      # 💬 여기에 사용 중이신 문자/슬랙/카카오톡 발송 액션을 추가하시면 됩니다.
+      # 각 구장 컴퓨터가 독립적으로 돌기 때문에 문자도 구장별로 따로 발송됩니다.
+      - name: 예약 가능시 문자 발송
+        if: steps.run_script.outputs.available == 'true'
+        run: |
+          echo "문자 발송 내용:"
+          echo "${{ steps.run_script.outputs.message }}"
+          # 실제 SMS API 호출 스크립트를 여기에 연동하시면 됩니다.
