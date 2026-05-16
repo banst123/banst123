@@ -1,7 +1,7 @@
 name: 백운포 풋살 모니터링
 
 on:
-  workflow_dispatch:  # 외부 크론에서 GitHub API로 호출
+  workflow_dispatch:
 
 jobs:
   futsal_monitor:
@@ -28,7 +28,6 @@ jobs:
         run: |
           echo "Telegram step started"
           MSG="${{ steps.check.outputs.message }}"
-          # 따옴표 이스케이프 최소화를 위해 jq 등 사용도 가능하지만, 우선 단순 텍스트 기준
           curl -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "{\"chat_id\": \"${TG_CHAT_ID}\", \"text\": \"${MSG}\"}"
