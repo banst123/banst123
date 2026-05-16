@@ -16,7 +16,7 @@ const WEEKS_AHEAD = 4;
 function formatDate(d) {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
+  const dd = String(d.getDate() + "").padStart(2, "0");
   return `${yyyy}${mm}${dd}`;
 }
 
@@ -64,6 +64,7 @@ function buildUrl(date, placeIndex) {
 
 // ===== Puppeteer에서 한 날짜+구장 처리 =====
 
+// 14·15·16회 예약가능 슬롯을 모두 가져온 뒤, 연속 2회 이상만 골라서 반환
 async function checkPageForSlots(page, url) {
   console.log(`    [브라우저] 페이지 로딩: ${url}`);
 
@@ -72,7 +73,7 @@ async function checkPageForSlots(page, url) {
     timeout: 60000,
   });
 
-  const slots = await page.evaluate(() => {
+  const rawSlots = await page.evaluate(() => {
     const TARGET_START_HOURS = [19, 20, 21];      // 19~21시 시작
     const TARGET_SESSIONS = ["14회", "15회", "16회"]; // 17회 제외
     const result = [];
@@ -112,7 +113,6 @@ async function checkPageForSlots(page, url) {
         continue;
       }
 
-      // 구조 가정: [선택, 회차, 시간, 이용금액, 예약상태, 예약자] 순 또는 유사
       const sessionText = cells[1]; // 예: "14회"
       const timeText = cells[2];    // 예: "19:00~20:00"
       const statusText = cells[4] || cells[3] || "";
@@ -147,16 +147,50 @@ async function checkPageForSlots(page, url) {
   });
 
   console.log(
-    `    [브라우저] 14·15·16회(19~21시) & 예약가능 슬롯 수: ${slots.length}`
+    `    [브라우저] 14·15·16회(19~21시) 예약가능 슬롯 수(단일): ${rawSlots.length}`
   );
-  return slots;
+
+  // === 여기서 연속 2시간(최소 2회 연속) 조건 적용 ===
+  // 세션을 회차 번호 기준으로 정렬 후, 연속 구간만 남긴다.
+  const sessionOrder = { "14회": 14, "15회": 15, "16회": 16 };
+  const sorted = rawSlots
+    .slice()
+    .sort((a, b) => sessionOrder[a.session] - sessionOrder[b.session]);
+
+  const usedSessions = new Set();
+  const finalSlots = [];
+
+  // 14-15, 15-16 연속 구간 탐색
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const cur = sorted[i];
+    const next = sorted[i + 1];
+    const curNo = sessionOrder[cur.session];
+    const nextNo = sessionOrder[next.session];
+
+    if (nextNo === curNo + 1) {
+      // 연속 2회 이상 확보
+      if (!usedSessions.has(cur.session)) {
+        finalSlots.push(cur);
+        usedSessions.add(cur.session);
+      }
+      if (!usedSessions.has(next.session)) {
+        finalSlots.push(next);
+        usedSessions.add(next.session);
+      }
+    }
+  }
+
+  console.log(
+    `    [브라우저] 연속 2시간 이상 조건 충족 슬롯 수: ${finalSlots.length}`
+  );
+  return finalSlots;
 }
 
 // ===== 메인 =====
 
 async function main() {
   const dates = getTargetDates(); // 내일부터 4주간, 월·목·금만
-  console.log("=== Puppeteer 기반 풋살1~4 예약 체크 시작 (월/목/금, 14~16회, 예약가능만) ===");
+  console.log("=== Puppeteer 기반 풋살1~4 예약 체크 시작 (월/목/금, 14~16회 연속 2시간 이상, 예약가능만) ===");
   console.log(`대상 날짜 수: ${dates.length}일`);
   console.log(`구장: ${placeNames.join(", ")}`);
 
@@ -201,7 +235,6 @@ async function main() {
         }
       });
 
-      // 이 날짜의 4개 구장을 병렬 실행
       await Promise.all(tasks);
     }
   } finally {
@@ -214,7 +247,7 @@ async function main() {
   if (alerts.length > 0) {
     available = true;
     const lines = [];
-    lines.push("▣ 백운포 풋살1~4구장 예약 가능 알림 (월·목·금, 14~16회/19~21시) ▣");
+    lines.push("▣ 백운포 풋살1~4구장 예약 가능 알림 (월·목·금, 14~16회 중 연속 2시간 이상) ▣");
     lines.push("");
 
     for (const alert of alerts) {
@@ -230,7 +263,7 @@ async function main() {
   } else {
     available = false;
     message =
-      "현재(풋살1~4구장, 내일부터 4주간 월·목·금, 14~16회/19~21시 시작)에 예약 가능 슬롯이 없습니다.";
+      "현재(풋살1~4구장, 내일부터 4주간 월·목·금, 14~16회/19~21시 중 연속 2시간 이상)에 예약 가능 슬롯이 없습니다.";
   }
 
   console.log("\n=== 결과 요약 ===");
