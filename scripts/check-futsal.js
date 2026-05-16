@@ -55,61 +55,67 @@ function buildUrl(date, placeIndex) {
 
 // ===== Puppeteer 크롤링 로직 =====
 async function checkPageForSlots(page, url, logPrefix) {
-  // 네트워크 최적화 (속도 단축)
-  await page.setRequestInterception(true);
-  page.on('request', (req) => {
-    if (['image', 'font', 'stylesheet', 'media'].includes(req.resourceType())) {
-      req.abort();
-    } else {
-      req.continue();
-    }
-  });
-
+  // 🛠️ 대기 원복: 예약 데이터 스크립트가 완전히 로드될 때까지 networkidle2로 확실하게 대기
   await page.goto(url, {
-    waitUntil: "domcontentloaded", 
-    timeout: 30000,
+    waitUntil: "networkidle2", 
+    timeout: 60000,
   });
-
-  try {
-    await page.waitForSelector("table", { timeout: 3000 });
-  } catch (e) {
-    console.log(`${logPrefix} ❌ 테이블 없음 (예약 불가일)`);
-    return [];
-  }
 
   const rawSlots = await page.evaluate(() => {
     const TARGET_SESSIONS = ["14회", "15회", "16회"];
     const result = [];
 
     const tables = Array.from(document.querySelectorAll("table"));
-    const targetTable = tables.find(tbl => {
-      const text = tbl.innerText || "";
-      return text.includes("회차") && text.includes("시간") && text.includes("예약상태");
-    });
+    let targetTable = null;
+    for (const tbl of tables) {
+      const headerText = tbl.innerText || "";
+      if (
+        headerText.includes("회차") &&
+        headerText.includes("시간") &&
+        headerText.includes("예약상태")
+      ) {
+        targetTable = tbl;
+        break;
+      }
+    }
 
     if (!targetTable) return result;
 
-    const rows = Array.from(targetTable.querySelectorAll("tbody tr"));
+    const rows = Array.from(targetTable.querySelectorAll("tr"));
     for (const row of rows) {
-      const cells = Array.from(row.querySelectorAll("th, td")).map(c => (c.innerText || "").trim());
-      if (cells.length < 3) continue;
+      const cells = Array.from(row.querySelectorAll("th,td")).map((c) =>
+        (c.innerText || "").trim()
+      );
+      if (cells.length < 4) continue;
 
-      const sessionText = cells.find(text => TARGET_SESSIONS.includes(text));
-      const isAvailable = cells.some(text => text.includes("예약가능"));
-      const timeText = cells.find(text => text.includes("~")) || "";
+      // 헤더 스킵
+      if (
+        cells[0].includes("선택") ||
+        cells[0].includes("회차") ||
+        cells[1].includes("시간")
+      ) {
+        continue;
+      }
 
-      if (sessionText && isAvailable) {
+      const sessionText = cells[1]; // "14회"
+      const timeText = cells[2];    // "19:00~20:00"
+      const statusText = cells[4] || cells[3] || "";
+      const status = statusText.trim();
+
+      if (!TARGET_SESSIONS.includes(sessionText)) continue;
+
+      if (status === "예약가능") {
         result.push({
           session: sessionText,
           time: timeText,
-          status: "예약가능"
+          status: status,
         });
       }
     }
     return result;
   });
 
-  // 🔍 [요구사항 반영] 1시간 단위 모든 예약 가능 슬롯을 검사 단계에서 로그로 즉시 출력
+  // 🔍 1시간 단위 발견 로그 출력
   if (rawSlots.length > 0) {
     const sessionNames = rawSlots.map(s => s.session).join(", ");
     console.log(`${logPrefix} 🔓 [단일 슬롯 발견] 총 ${rawSlots.length}개 검색됨 (${sessionNames})`);
@@ -133,10 +139,7 @@ async function main() {
       "--no-sandbox", 
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--no-first-run",
-      "--no-zygote",
-      "--single-process"
+      "--disable-gpu"
     ],
   });
 
@@ -149,9 +152,10 @@ async function main() {
     }
   }
 
-  console.log(`총 실행할 쿼리 수: ${allTasks.length}개 (완전 병렬 처리 시작)\n--------------------------------------------------`);
+  console.log(`총 실행할 쿼리 수: ${allTasks.length}개 (병렬 처리 시작)\n--------------------------------------------------`);
 
-  const CHUNK_SIZE = 10; 
+  // 🛠️ 가상 인프라 무리 방지 및 누락 예방을 위해 동시 처리를 6개 단위 청크로 세팅
+  const CHUNK_SIZE = 6; 
   for (let i = 0; i < allTasks.length; i += CHUNK_SIZE) {
     const chunk = allTasks.slice(i, i + CHUNK_SIZE);
     
@@ -166,14 +170,13 @@ async function main() {
           "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
         );
 
-        // 1시간 단위 결과 우선 모두 수집
         const slots = await checkPageForSlots(page, url, logPrefix);
         if (slots.length > 0) {
           allDiscoveredResults.push({
             date: task.date,
             placeIndex: task.pIdx,
             placeName: task.name,
-            slots, // 검색된 모든 단일 슬롯 저장
+            slots, 
           });
         }
       } catch (e) {
@@ -188,31 +191,27 @@ async function main() {
 
   await browser.close();
 
-  // ===== 🚀 2차 필터링: 연속 2시간 이상 조건 검증 (문자 발송 데이터 추출) =====
+  // ===== 2차 필터링: 연속 2시간 이상 조건 검증 =====
   const alerts = [];
 
   for (const res of allDiscoveredResults) {
     const availableSessions = res.slots.map(s => s.session);
     
-    // 14-15 연속이거나 15-16 연속인 경우 판별
     const hasContinuousSlots = 
       (availableSessions.includes("14회") && availableSessions.includes("15회")) ||
       (availableSessions.includes("15회") && availableSessions.includes("16회"));
 
     if (hasContinuousSlots) {
-      alerts.push(res); // 조건 충족 시 최종 알림 배열에 추가
+      alerts.push(res);
     }
   }
 
-  // ===== 결과 출력 및 GitHub Output 생성 (최종 문자 내용) =====
+  // ===== 결과 출력 및 GitHub Output 생성 =====
   let available = false;
   let message = "";
-  
-  const totalAlertSlotsCount = alerts.reduce((acc, cur) => acc + cur.slots.length, 0);
 
   if (alerts.length > 0) {
     available = true;
-    // 날짜 및 구장 순 정렬
     alerts.sort((a, b) => a.date.localeCompare(b.date) || a.placeIndex - b.placeIndex);
     
     const lines = [
