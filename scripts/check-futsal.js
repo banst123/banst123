@@ -8,8 +8,9 @@ const placeNames = ["풋살2구장"];
 const placeParts = ["05"];
 const placeIds   = ["7"];
 
-// 테스트: checkbox_time_1 ~ 17 전체 스캔
-const targetSessionIds = Array.from({ length: 17 }, (_, i) => i + 1);
+// 테스트: checkbox_time_* 전체를 대상으로 함
+// (id 숫자를 강제로 제한하지 않고, 실제 존재하는 체크박스 전부 스캔)
+const TARGET_START_HOURS = [19, 20, 21]; // 19·20·21시 시작 슬롯만 필터
 
 // 날짜 범위: "오늘+1일"부터 "오늘+7일"까지만 (총 7일)
 function formatDate(d) {
@@ -76,50 +77,65 @@ async function fetchHtml(url) {
   }
 }
 
-// HTML에서 checkbox_time_1~17의 disabled/checked를 모두 확인
+// HTML에서 모든 time 체크박스를 스캔하고, value/상태를 로그 + 19·20·21시만 반환
 function parseAvailability(html) {
   const dom = new JSDOM(html);
   const document = dom.window.document;
 
+  // 모든 time 체크박스를 수집
+  const inputs = Array.from(
+    document.querySelectorAll('input[type="checkbox"][name="time"][id^="checkbox_time_"]')
+  );
+  console.log(`[parse] time 체크박스 개수: ${inputs.length}`);
+
   const slots = [];
 
-  for (const id of targetSessionIds) {
-    const cb = document.querySelector(`input[id="checkbox_time_${id}"]`);
+  for (const cb of inputs) {
+    const idAttr = cb.id || "";
+    const idNum = parseInt(idAttr.replace("checkbox_time_", ""), 10);
 
-    if (!cb) {
-      console.log(`[parse] checkbox_time_${id} 를 찾지 못함`);
-      continue;
+    const valueAttr = cb.value || "";
+    const parts = valueAttr.split(";");
+    // 예: "844;11회;1600;1700;1" 형태라고 가정
+    const sessionLabel = (parts[1] || "").trim(); // "11회"
+    const startStr = (parts[2] || "").trim();      // "1600"
+    const endStr = (parts[3] || "").trim();        // "1700"
+
+    let startHour = NaN;
+    let endHour = NaN;
+    if (startStr.length >= 2 && endStr.length >= 2) {
+      startHour = parseInt(startStr.slice(0, 2), 10);
+      endHour = parseInt(endStr.slice(0, 2), 10);
     }
+
+    const disabled = cb.disabled;
+    const checked = cb.checked;
+    const available = !disabled && !checked;
 
     const row = cb.closest("tr");
     const cells = row ? row.querySelectorAll("td") : [];
     const rawLast = cells.length > 0 ? (cells[cells.length - 1].textContent || "") : "";
     const cleaned = rawLast.replace(/예약가능|선택|-/g, "").trim();
-
-    const disabled = cb.disabled;
-    const checked = cb.checked;
-    const available = !disabled && !checked;
     const booker = available ? "예약가능" : (cleaned || "완료");
 
-    const sessionNo = id + 1;
-    const startHour = id + 6;
-    const endHour = startHour + 1;
-    const time =
-      `${String(startHour).padStart(2, "0")}:00~` +
-      `${String(endHour).padStart(2, "0")}:00`;
-
     console.log(
-      `[parse] id=${id}, time=${time}, disabled=${disabled}, checked=${checked}, ` +
-        `raw="${rawLast.trim()}", cleaned="${cleaned}", available=${available}, booker=${booker}`
+      `[parse] id=${idNum}, value="${valueAttr}", session=${sessionLabel}, ` +
+        `time=${startStr}~${endStr}, startHour=${startHour}, endHour=${endHour}, ` +
+        `disabled=${disabled}, checked=${checked}, available=${available}, ` +
+        `raw="${rawLast.trim()}", cleaned="${cleaned}"`
     );
 
-    slots.push({
-      id,
-      sessionNo,
-      time,
-      available,
-      booker,
-    });
+    // 19·20·21시 시작 슬롯만 모니터링 대상
+    if (TARGET_START_HOURS.includes(startHour)) {
+      slots.push({
+        id: idNum,
+        sessionLabel,
+        startHour,
+        endHour,
+        available,
+        booker,
+      });
+    }
   }
 
   return slots;
@@ -130,10 +146,10 @@ function parseAvailability(html) {
 async function main() {
   const dates = getNextDaysRange(1, 7);
 
-  console.log(`=== 모니터링 시작 (테스트 모드: 풋살2, id 1~17) ===`);
+  console.log(`=== 모니터링 시작 (테스트 모드: 풋살2, 오늘+1~7일, all checkbox_time_*) ===`);
   console.log(`날짜 범위: ${dates[0]} ~ ${dates[dates.length - 1]}`);
   console.log(`구장: ${placeNames.join(", ")}`);
-  console.log(`체크박스 IDs: ${targetSessionIds.join(", ")}`);
+  console.log(`타겟 시작시: ${TARGET_START_HOURS.join(", ")}시`);
 
   const alerts = [];
 
@@ -151,7 +167,7 @@ async function main() {
         const slots = parseAvailability(html);
         const availCount = slots.filter((s) => s.available).length;
         console.log(
-          `    - 총 체크한 세션 수: ${slots.length}, 예약가능: ${availCount}`
+          `    - 타겟(19/20/21시) 슬롯 수: ${slots.length}, 예약가능: ${availCount}`
         );
 
         const availableSlots = slots.filter((s) => s.available);
@@ -176,14 +192,16 @@ async function main() {
   if (alerts.length > 0) {
     available = true;
     const lines = [];
-    lines.push("▣ 백운포 풋살2구장 예약 가능 알림 (테스트 모드: id 1~17) ▣");
+    lines.push("▣ 백운포 풋살2구장 예약 가능 알림 (테스트 모드) ▣");
     lines.push("");
 
     for (const alert of alerts) {
       const dateTitle = formatDatePretty(alert.date);
       lines.push(`▶ ${dateTitle} ${alert.placeName}`);
       for (const s of alert.slots) {
-        lines.push(` - id=${s.id}, ${s.sessionNo}회 ${s.time}: ${s.booker}`);
+        lines.push(
+          ` - id=${s.id}, ${s.sessionLabel} ${s.startHour}:00~${s.endHour}:00: ${s.booker}`
+        );
       }
       lines.push("");
     }
@@ -192,7 +210,7 @@ async function main() {
   } else {
     available = false;
     message =
-      "현재(테스트 범위: 풋살2구장, 오늘+1~7일, id 1~17)에 예약 가능 슬롯이 없습니다.";
+      "현재(테스트 범위: 풋살2구장, 오늘+1~7일, 19/20/21시 시작)에 예약 가능 슬롯이 없습니다.";
   }
 
   console.log("\n=== 결과 요약 ===");
