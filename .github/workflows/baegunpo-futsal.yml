@@ -2,16 +2,16 @@ name: 백운포 풋살장 예약 모니터링
 
 on:
   schedule:
-    - cron: '*/10 * * * *' # 10분마다 실행 (원하는 주기로 변경 가능)
-  workflow_dispatch:       # 수동 실행 버튼 활성화
+    - cron: '*/10 * * * *' # 10분마다 자동 실행 (원하는 주기로 조정 가능)
+  workflow_dispatch:       # 깃허브 웹에서 수동으로 실행할 수 있는 버튼 활성화
 
 jobs:
   check-futsal:
     runs-on: ubuntu-latest
     strategy:
-      # max-parallel: 4 # 4개 구장을 완전히 동시에 실행
+      fail-fast: false     # 🚀 중요: 한 구장이 실패하더라도 다른 구장 검사가 취소되지 않고 끝까지 돌아감
       matrix:
-        place_index: [0, 1, 2, 3] # 0=1구장, 1=2구장, 2=3구장, 3=4구장
+        place_index: [0, 1, 2, 3] # 4대의 가상 컴퓨터를 동시에 띄움 (0=1구장, 1=2구장 ...)
         
     steps:
       - name: 코드 체크아웃
@@ -20,22 +20,26 @@ jobs:
       - name: Node.js 설정
         uses: actions/setup-node@v4
         with:
-          node-node-version: 20
+          node-version: 20
+          cache: 'npm'     # npm 패시 활용으로 실행 속도 향상
 
-      - name: 의존성 설치
-        run: npm install puppeteer
+      - name: 의존성 및 Puppeteer 브라우저 설치
+        run: |
+          npm ci || npm install
+          npx puppeteer browsers install chrome
 
       - name: 구장별 독립 크롤링 실행
         id: run_script
         env:
-          PLACE_INDEX: ${{ matrix.place_index }} # 가상 컴퓨터별로 자신의 구장 인덱스를 주입
-        run: node check-futsal.js
+          PLACE_INDEX: ${{ matrix.place_index }} # 가상 컴퓨터별로 구장 인덱스 주입
+        run: node scripts/check-futsal.js # 🚀 scripts 폴더 경로 반영 완료
 
-      # 💬 여기에 사용 중이신 문자/슬랙/카카오톡 발송 액션을 추가하시면 됩니다.
-      # 각 구장 컴퓨터가 독립적으로 돌기 때문에 문자도 구장별로 따로 발송됩니다.
-      - name: 예약 가능시 문자 발송
+      # 💬 [알림 연동] 사용 중이신 텔레그램/문자 발송 Actions 코드를 이 아래에 연동하시면 됩니다.
+      # 세팅된 구장별로 메시지가 각각 분리되어 발송됩니다.
+      - name: 예약 가능시 알림/문자 발송 테스트 출력
         if: steps.run_script.outputs.available == 'true'
         run: |
-          echo "문자 발송 내용:"
+          echo "=================================================="
+          echo "📱 실제 발송될 문자/알림 내용:"
+          echo "=================================================="
           echo "${{ steps.run_script.outputs.message }}"
-          # 실제 SMS API 호출 스크립트를 여기에 연동하시면 됩니다.
