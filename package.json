@@ -1,0 +1,14 @@
+{
+  "name": "baegunpo-futsal-monitor",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "check:futsal": "node scripts/check-futsal.js"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "jsdom": "^24.0.0"
+  }
+}
