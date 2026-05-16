@@ -1,39 +1,28 @@
-name: 백운포 풋살 모니터링
-
-on:
-  schedule:
-    # 월/목 2분 간격 (UTC 기준, 한국시간 맞추려면 필요시 조정)
-    - cron: "*/2 * * * 1,4"
-    # 화/금 10분 간격
-    - cron: "*/10 * * * 2,5"
-  workflow_dispatch:
-
 jobs:
   futsal_monitor:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Step 1 - Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Step 2 - Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install dependencies
+      - name: Step 3 - Install dependencies
         run: npm install
 
-      - name: Check futsal availability
+      - name: Step 4 - Check futsal availability
         id: check
         run: npm run check:futsal
 
-      - name: Send Telegram notification
+      - name: Step 5 - Send Telegram notification
         if: steps.check.outputs.available == 'true'
         run: |
-          # GitHub Actions outputs에서 message를 환경변수로 받아옴
+          echo "Telegram step started"
           MSG="${{ steps.check.outputs.message }}"
-          # 텔레그램으로 전송
           curl -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "{\"chat_id\": \"${TG_CHAT_ID}\", \"text\": \"${MSG}\"}"
