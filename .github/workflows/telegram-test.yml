@@ -1,0 +1,17 @@
+name: Telegram Test
+
+on:
+  workflow_dispatch:  # 수동 실행용
+
+jobs:
+  send_test_message:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send test message to Telegram
+        run: |
+          curl -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\": \"${TG_CHAT_ID}\", \"text\": \"[테스트] 백운포 풋살 알림 봇 연결 확인\"}"
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
