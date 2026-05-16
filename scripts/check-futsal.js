@@ -8,6 +8,10 @@ const placeIds   = ["6",  "7",  "8",  "9"];
 const TARGET_WEEKDAYS = [1, 4, 5]; // 월, 목, 금
 const WEEKS_AHEAD = 4;
 
+// 🚀 [중요] GitHub Actions에서 넘겨준 단 하나의 구장 인덱스만 선택 (없으면 기본값 0)
+const TARGET_PLACE_IDX = parseInt(process.env.PLACE_INDEX || "0", 10);
+const TARGET_PLACE_NAME = placeNames[TARGET_PLACE_IDX];
+
 // ===== 날짜 유틸 =====
 function formatDate(d) {
   const yyyy = d.getFullYear();
@@ -55,7 +59,6 @@ function buildUrl(date, placeIndex) {
 
 // ===== Puppeteer 크롤링 로직 =====
 async function checkPageForSlots(page, url, logPrefix) {
-  // 🛠️ 대기 원복: 예약 데이터 스크립트가 완전히 로드될 때까지 networkidle2로 확실하게 대기
   await page.goto(url, {
     waitUntil: "networkidle2", 
     timeout: 60000,
@@ -69,11 +72,7 @@ async function checkPageForSlots(page, url, logPrefix) {
     let targetTable = null;
     for (const tbl of tables) {
       const headerText = tbl.innerText || "";
-      if (
-        headerText.includes("회차") &&
-        headerText.includes("시간") &&
-        headerText.includes("예약상태")
-      ) {
+      if (headerText.includes("회차") && headerText.includes("시간") && headerText.includes("예약상태")) {
         targetTable = tbl;
         break;
       }
@@ -83,39 +82,27 @@ async function checkPageForSlots(page, url, logPrefix) {
 
     const rows = Array.from(targetTable.querySelectorAll("tr"));
     for (const row of rows) {
-      const cells = Array.from(row.querySelectorAll("th,td")).map((c) =>
-        (c.innerText || "").trim()
-      );
+      const cells = Array.from(row.querySelectorAll("th,td")).map(c => (c.innerText || "").trim());
       if (cells.length < 4) continue;
 
-      // 헤더 스킵
-      if (
-        cells[0].includes("선택") ||
-        cells[0].includes("회차") ||
-        cells[1].includes("시간")
-      ) {
+      if (cells[0].includes("선택") || cells[0].includes("회차") || cells[1].includes("시간")) {
         continue;
       }
 
-      const sessionText = cells[1]; // "14회"
-      const timeText = cells[2];    // "19:00~20:00"
+      const sessionText = cells[1]; 
+      const timeText = cells[2];    
       const statusText = cells[4] || cells[3] || "";
       const status = statusText.trim();
 
       if (!TARGET_SESSIONS.includes(sessionText)) continue;
 
       if (status === "예약가능") {
-        result.push({
-          session: sessionText,
-          time: timeText,
-          status: status,
-        });
+        result.push({ session: sessionText, time: timeText, status: status });
       }
     }
     return result;
   });
 
-  // 🔍 1시간 단위 발견 로그 출력
   if (rawSlots.length > 0) {
     const sessionNames = rawSlots.map(s => s.session).join(", ");
     console.log(`${logPrefix} 🔓 [단일 슬롯 발견] 총 ${rawSlots.length}개 검색됨 (${sessionNames})`);
@@ -130,32 +117,21 @@ async function checkPageForSlots(page, url, logPrefix) {
 // ===== 메인 함수 =====
 async function main() {
   const dates = getTargetDates();
-  console.log("=== Puppeteer 기반 풋살1~4 예약 체크 시작 ===");
-  console.log(`대상 날짜 수: ${dates.length}일 / 구장: ${placeNames.join(", ")}`);
+  console.log(`=== Puppeteer 기반 [${TARGET_PLACE_NAME}] 전용 체크 시작 ===`);
+  console.log(`대상 날짜 수: ${dates.length}일 / 타겟 구장: ${TARGET_PLACE_NAME}`);
 
   const browser = await puppeteer.launch({
     headless: "new",
-    args: [
-      "--no-sandbox", 
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu"
-    ],
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
   });
 
   const allDiscoveredResults = [];
-  
-  const allTasks = [];
-  for (const date of dates) {
-    for (let pIdx = 0; pIdx < placeNames.length; pIdx++) {
-      allTasks.push({ date, pIdx, name: placeNames[pIdx] });
-    }
-  }
 
-  console.log(`총 실행할 쿼리 수: ${allTasks.length}개 (병렬 처리 시작)\n--------------------------------------------------`);
+  // 🚀 지정된 단 하나의 구장에 대해서만 날짜별 태스크 생성 (총 12개)
+  const allTasks = dates.map(date => ({ date, pIdx: TARGET_PLACE_IDX, name: TARGET_PLACE_NAME }));
 
-  // 🛠️ 가상 인프라 무리 방지 및 누락 예방을 위해 동시 처리를 6개 단위 청크로 세팅
-  const CHUNK_SIZE = 6; 
+  // 단일 구장만 처리하므로 동시 처리는 4개 단위로 여유 있게 진행 (GitHub 사양 최적화)
+  const CHUNK_SIZE = 4; 
   for (let i = 0; i < allTasks.length; i += CHUNK_SIZE) {
     const chunk = allTasks.slice(i, i + CHUNK_SIZE);
     
@@ -166,18 +142,11 @@ async function main() {
 
       try {
         const url = buildUrl(task.date, task.pIdx);
-        await page.setUserAgent(
-          "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
-        );
+        await page.setUserAgent("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36");
 
         const slots = await checkPageForSlots(page, url, logPrefix);
         if (slots.length > 0) {
-          allDiscoveredResults.push({
-            date: task.date,
-            placeIndex: task.pIdx,
-            placeName: task.name,
-            slots, 
-          });
+          allDiscoveredResults.push({ date: task.date, placeIndex: task.pIdx, placeName: task.name, slots });
         }
       } catch (e) {
         console.error(`${logPrefix} 🚨 에러 발생:`, e.message);
@@ -185,18 +154,14 @@ async function main() {
         await page.close();
       }
     }));
-    
-    console.log(`-------------------------------------------------- [진행률: ${Math.min(i + CHUNK_SIZE, allTasks.length)} / ${allTasks.length} 완료]`);
   }
 
   await browser.close();
 
   // ===== 2차 필터링: 연속 2시간 이상 조건 검증 =====
   const alerts = [];
-
   for (const res of allDiscoveredResults) {
     const availableSessions = res.slots.map(s => s.session);
-    
     const hasContinuousSlots = 
       (availableSessions.includes("14회") && availableSessions.includes("15회")) ||
       (availableSessions.includes("15회") && availableSessions.includes("16회"));
@@ -206,22 +171,22 @@ async function main() {
     }
   }
 
-  // ===== 결과 출력 및 GitHub Output 생성 =====
+  // ===== 결과 출력 및 구장별 전용 문자 메시지 생성 =====
   let available = false;
   let message = "";
 
   if (alerts.length > 0) {
     available = true;
-    alerts.sort((a, b) => a.date.localeCompare(b.date) || a.placeIndex - b.placeIndex);
+    alerts.sort((a, b) => a.date.localeCompare(b.date));
     
     const lines = [
-      `▣ 백운포 풋살1~4구장 예약 가능 알림 (연속 2시간 이상 확보 완료) ▣`,
+      `▣ 백운포 [${TARGET_PLACE_NAME}] 예약 가능 알림 ▣`,
       `[문자 발송 대상 타임 목록]`,
       ""
     ];
 
     for (const alert of alerts) {
-      lines.push(`▶️ ${formatDatePretty(alert.date)} ${alert.placeName}`);
+      lines.push(`▶️ ${formatDatePretty(alert.date)}`);
       for (const s of alert.slots) {
         lines.push(`- ${s.session} ${s.time}: ${s.status}`);
       }
@@ -230,12 +195,12 @@ async function main() {
     message = lines.join("\n");
   } else {
     available = false;
-    message = "현재 예약 가능한 슬롯이 없습니다. (대상: 내일부터 4주간 월/목/금 14~16회 연속 2시간 이상)";
+    message = `현재 [${TARGET_PLACE_NAME}]에 예약 가능한 2시간 연속 슬롯이 없습니다.`;
   }
 
-  console.log("\n==================================================");
-  console.log("📬 [최종 알림 내역 - 문자 발송용 메시지]");
-  console.log("==================================================");
+  console.log(`\n==================================================`);
+  console.log(`📬 [${TARGET_PLACE_NAME} 문자 발송용 메시지 요약]`);
+  console.log(`==================================================`);
   console.log(message);
 
   const ghOutput = process.env.GITHUB_OUTPUT;
@@ -247,6 +212,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error("check-futsal.js failed:", e);
+  console.error(`${TARGET_PLACE_NAME} 스크립트 실패:`, e);
   process.exit(1);
 });
