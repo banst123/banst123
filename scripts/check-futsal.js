@@ -2,7 +2,7 @@ import puppeteer from "puppeteer";
 
 // ===== 설정 영역 =====
 
-// 테스트: 풋살2구장만 (part=05, place=7)
+// 현재는 풋살2구장만 (part=05, place=7)
 const placeNames = ["풋살2구장"];
 const placeParts = ["05"];
 const placeIds   = ["7"];
@@ -62,7 +62,7 @@ async function checkPageForSlots(page, url) {
   const slots = await page.evaluate(() => {
     const result = [];
 
-    // 예약 테이블 찾기
+    // 예약 테이블 찾기: "회차", "시간", "예약상태"를 포함하는 table
     const tables = Array.from(document.querySelectorAll("table"));
     let targetTable = null;
     for (const tbl of tables) {
@@ -98,10 +98,10 @@ async function checkPageForSlots(page, url) {
         continue;
       }
 
-      // 구조 가정: [선택, 회차, 시간, 이용금액, 예약상태, 예약자] 순 또는 비슷한 구조
-      const sessionText = cells[1]; // "14회"
-      const timeText = cells[2];    // "19:00~20:00"
-      const statusText = cells[4] || cells[3] || ""; // "예약가능"/"예약완료"
+      // 구조 가정: [선택, 회차, 시간, 이용금액, 예약상태, 예약자] 순 또는 유사
+      const sessionText = cells[1]; // 예: "14회"
+      const timeText = cells[2];    // 예: "19:00~20:00"
+      const statusText = cells[4] || cells[3] || ""; // 예약상태 위치는 HTML 구조에 따라 조정 가능
 
       const status = statusText.trim();
 
@@ -118,9 +118,7 @@ async function checkPageForSlots(page, url) {
     return result;
   });
 
-  console.log(
-    `  [브라우저] 예약가능 슬롯 수(모든 시간): ${slots.length}`
-  );
+  console.log(`  [브라우저] 예약가능 슬롯 수(모든 시간): ${slots.length}`);
   return slots;
 }
 
