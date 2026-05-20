@@ -25,7 +25,7 @@ const RESULT_FILES = [
   path.join(__dirname, "futsal_results_3.json"),
 ];
 
-// “이미 알림 보낸 조합” 기록용 파일 (scripts 폴더에서 상위 폴더인 루트로 이동)
+// “이미 알림 보낸 조합” 기록용 파일 (repo 루트)
 const SEEN_FILE = path.join(__dirname, "..", "seen_futsal.json");
 
 // 모니터링 대상 요일: 월(1)~금(5)
@@ -108,7 +108,8 @@ async function checkPageForSlots(page, url, logPrefix) {
   });
 
   const rawSlots = await page.evaluate(() => {
-    const TARGET_SESSIONS = ["14회", "15회", "16회"]; // 19~21시 타겟 회차
+    // 13~17회까지 모두 수집
+    const TARGET_SESSIONS = ["13회", "14회", "15회", "16회", "17회"];
     const result = [];
 
     const tables = Array.from(document.querySelectorAll("table"));
@@ -187,7 +188,7 @@ async function checkPageForSlots(page, url, logPrefix) {
     console.log(`${logPrefix} 📭 예약가능 슬롯 없음`);
   }
 
-  const sessionOrder = { "14회": 14, "15회": 15, "16회": 16 };
+  const sessionOrder = { "13회": 13, "14회": 14, "15회": 15, "16회": 16, "17회": 17 };
   return rawSlots.sort((a, b) => sessionOrder[a.session] - sessionOrder[b.session]);
 }
 
@@ -286,9 +287,9 @@ async function runCollectMode() {
   console.log(`📁 [COLLECT] 결과 저장 완료: ${outPath}`);
 }
 
-// ===== merge 모드: 4개 JSON 합쳐서 구장 혼합 연속 2시간 판정 + 중복 알림 방지 =====
+// ===== merge 모드: 4개 JSON 합쳐서 구장 혼합 연속 2~3시간 판정 + 중복 알림 방지 =====
 function runMergeMode() {
-  console.log("=== [MERGE] 4개 구장 결과 통합 및 연속 2시간 판정 시작 ===");
+  console.log("=== [MERGE] 4개 구장 결과 통합 및 연속 2~3시간 판정 시작 ===");
 
   const allResults = [];
 
@@ -343,14 +344,35 @@ function runMergeMode() {
     }
 
     const allSessions = allSlots.map((s) => s.session);
-    const hasContinuousSlots =
-      (allSessions.includes("14회") && allSessions.includes("15회")) ||
-      (allSessions.includes("15회") && allSessions.includes("16회"));
+
+    // 숫자로 변환해서 unique + 오름차순 정렬
+    const nums = Array.from(
+      new Set(
+        allSessions
+          .map((s) => parseInt(s.replace("회", ""), 10))
+          .filter((n) => !Number.isNaN(n))
+      )
+    ).sort((a, b) => a - b);
+
+    // 1. 황금 타임 2시간 연속 확보 (14-15, 15-16)
+    const golden2h =
+      (nums.includes(14) && nums.includes(15)) ||
+      (nums.includes(15) && nums.includes(16));
+
+    // 2. 18시(13회) 포함 시 -> 전후 연속 3시간 확보 (13-14-15)
+    const early3h =
+      nums.includes(13) && nums.includes(14) && nums.includes(15);
+
+    // 3. 23시(17회) 포함 시 -> 전후 연속 3시간 확보 (15-16-17)
+    const late3h =
+      nums.includes(15) && nums.includes(16) && nums.includes(17);
+
+    // 최종 연속성 여부
+    const hasContinuousSlots = golden2h || early3h || late3h;
 
     console.log(
-      `[연속검사] ${prettyDate} - 세션: ${
-        allSessions.join(", ") || "없음"
-      } / 연속 여부: ${hasContinuousSlots}`
+      `[연속검사] ${prettyDate} - 세션: ${allSessions.join(", ") || "없음"} ` +
+      `/ 황금2h:${golden2h} / 18시연계3h:${early3h} / 23시연계3h:${late3h} -> 최종:${hasContinuousSlots}`
     );
 
     if (!hasContinuousSlots) continue;
@@ -396,7 +418,7 @@ function runMergeMode() {
     alerts.sort((a, b) => a.date.localeCompare(b.date));
 
     const lines = [
-      "▣ 백운포 풋살장 예약 가능 알림 (구장 혼합 포함, 연속 2시간 확보) ▣",
+      "▣ 백운포 풋살장 예약 가능 알림 (구장 혼합 포함, 연속 2~3시간 확보) ▣",
       "[문자 발송 대상 타임 목록]",
       "",
     ];
@@ -422,7 +444,7 @@ function runMergeMode() {
   } else {
     available = false;
     message =
-      "현재 (월~금, 14~16회차 중 연속 2시간 이상, 구장 혼합 포함)에 새로 알릴 예약 가능 슬롯이 없습니다.";
+      "현재 (월~금, 13~17회차 중 3시간 연속(13~15, 15~17) 또는 2시간 연속(14~15, 15~16)에 새로 알릴 예약 가능 슬롯이 없습니다.";
   }
 
   console.log("\n==================================================");
