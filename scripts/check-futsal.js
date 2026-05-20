@@ -25,6 +25,9 @@ const RESULT_FILES = [
   path.join(__dirname, "futsal_results_3.json"),
 ];
 
+// “이미 알림 보낸 조합” 기록용 파일
+const SEEN_FILE = path.join(__dirname, "seen_futsal.json");
+
 // 모니터링 대상 요일: 월(1)~금(5)
 const TARGET_WEEKDAYS = [1, 2, 3, 4, 5];
 const WEEKS_AHEAD = 4; // 오늘 기준 4주간
@@ -72,6 +75,27 @@ function buildUrl(date, placeIndex) {
   const part = placeParts[placeIndex];
   const place = placeIds[placeIndex];
   return `https://www.bnfmc.or.kr/reservation/www/9?facilities_type=T&base_date=${date}&rent_type=1001&center=NAMGUSPORTS02&part=${part}&place=${place}#regist_list`;
+}
+
+// ===== seen_futsal.json 유틸 =====
+function loadSeenAlertIds() {
+  try {
+    if (!fs.existsSync(SEEN_FILE)) return new Set();
+    const raw = fs.readFileSync(SEEN_FILE, "utf8");
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveSeenAlertIds(set) {
+  try {
+    fs.writeFileSync(SEEN_FILE, JSON.stringify(Array.from(set), null, 2), "utf8");
+  } catch (e) {
+    console.error("[ERROR] seen_futsal.json 저장 오류:", e.message);
+  }
 }
 
 // ===== Puppeteer: 단일 구장/날짜 슬롯 수집 =====
@@ -261,10 +285,10 @@ async function runCollectMode() {
   );
   console.log(`📁 [COLLECT] 결과 저장 완료: ${outPath}`);
 
-  // collect 모드에서는 GitHub Output을 건드리지 않음 (최종 판정은 merge 모드에서)
+  // collect 모드에서는 GitHub Output을 건드리지 않음
 }
 
-// ===== merge 모드: 4개 JSON 합쳐서 구장 혼합 연속 2시간 판정 =====
+// ===== merge 모드: 4개 JSON 합쳐서 구장 혼합 연속 2시간 판정 + 중복 알림 방지 =====
 function runMergeMode() {
   console.log("=== [MERGE] 4개 구장 결과 통합 및 연속 2시간 판정 시작 ===");
 
@@ -302,7 +326,7 @@ function runMergeMode() {
     groupedByDate.get(res.date).items.push(res);
   }
 
-  const alerts = [];
+  const rawAlerts = [];
 
   for (const { date, items } of groupedByDate.values()) {
     const allSlots = items.flatMap((it) =>
@@ -333,7 +357,30 @@ function runMergeMode() {
 
     if (!hasContinuousSlots) continue;
 
-    alerts.push({ date, items });
+    rawAlerts.push({ date, items, allSessions });
+  }
+
+  // ===== 한 번 알린 조합은 다시 알리지 않기 =====
+  const seenIds = loadSeenAlertIds();
+  const newSeen = new Set(seenIds);
+
+  const alerts = [];
+
+  for (const alert of rawAlerts) {
+    const sessionsSorted = Array.from(new Set(alert.allSessions)).sort();
+    const alertId = `${alert.date}-${sessionsSorted.join("+")}`;
+
+    if (seenIds.has(alertId)) {
+      console.log(
+        `[MERGE] 이미 알림 보낸 조합 (skip): ${formatDatePretty(
+          alert.date
+        )} / ${sessionsSorted.join(", ")}`
+      );
+      continue;
+    }
+
+    alerts.push({ ...alert, alertId });
+    newSeen.add(alertId);
   }
 
   let available = false;
@@ -364,10 +411,13 @@ function runMergeMode() {
     }
 
     message = lines.join("\n");
+
+    // 이번에 새로 알린 조합들을 seen_futsal.json에 저장
+    saveSeenAlertIds(newSeen);
   } else {
     available = false;
     message =
-      "현재 (월~금, 14~16회차 중 연속 2시간 이상, 구장 혼합 포함)에 예약 가능 슬롯이 없습니다.";
+      "현재 (월~금, 14~16회차 중 연속 2시간 이상, 구장 혼합 포함)에 새로 알릴 예약 가능 슬롯이 없습니다.";
   }
 
   console.log("\n==================================================");
