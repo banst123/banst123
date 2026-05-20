@@ -163,3 +163,9 @@ jobs:
           echo "📱 실제 발송될 문자/알림 내용:"
           echo "=================================================="
           echo "${{ steps.merge_step.outputs.message }}"
+      - name: seen_futsal.json 변경사항 커밋/푸시   # ← 이거 추가
+        if: ${{ steps.merge_step.outputs.available == 'true' }}
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update seen futsal cache"
+          file_pattern: seen_futsal.json
