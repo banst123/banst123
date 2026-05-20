@@ -146,8 +146,7 @@ async function checkPageForSlots(page, url, logPrefix) {
         cells[0].includes("회차") ||
         cells[1].includes("시간")
       ) {
-        // 헤더 행
-        continue;
+        continue; // 헤더 행
       }
 
       const sessionText = cells[1]; // 예: "14회"
@@ -284,8 +283,6 @@ async function runCollectMode() {
     "utf8"
   );
   console.log(`📁 [COLLECT] 결과 저장 완료: ${outPath}`);
-
-  // collect 모드에서는 GitHub Output을 건드리지 않음
 }
 
 // ===== merge 모드: 4개 JSON 합쳐서 구장 혼합 연속 2시간 판정 + 중복 알림 방지 =====
