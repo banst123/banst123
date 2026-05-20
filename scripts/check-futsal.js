@@ -29,8 +29,8 @@ const RESULT_FILES = [
 const SEEN_FILE = path.join(__dirname, "..", "seen_futsal.json");
 
 // 모니터링 대상 요일: 월(1)~금(5)
-const TARGET_WEEKDAYS = [1, 2, 3, 4, 5];
-const WEEKS_AHEAD = 4; // 오늘 기준 4주간
+const TARGET_WEEKDAYS = [1, 2, 4];
+const WEEKS_AHEAD = 5; // 오늘 기준 5주간
 
 // ===== 공통 날짜 유틸 =====
 function formatDate(d) {
