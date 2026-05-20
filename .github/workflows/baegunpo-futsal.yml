@@ -2,7 +2,7 @@ name: 백운포 풋살장 예약 모니터링
 
 on:
   schedule:
-    - cron: '*/15 * * * *'   # 15분마다
+    - cron: '*/15 * * * *'   # 15분마다 실행 (원하는 주기로 조정 가능)
   workflow_dispatch:
 
 jobs:
@@ -91,12 +91,12 @@ jobs:
           echo "GITHUB_OUTPUT=$GITHUB_OUTPUT" >> $GITHUB_ENV
           node scripts/check-futsal.js
 
-      # 텔레그램 발송 (실제 알림)
+      # 텔레그램 발송 (실제 알림) - Secrets: TG_BOT_TOKEN, TG_CHAT_ID 사용
       - name: 예약 가능시 텔레그램 발송
         if: ${{ steps.merge_step.outputs.available == 'true' }}
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           FUTSAL_MESSAGE: ${{ steps.merge_step.outputs.message }}
         run: |
           node - << 'EOF'
