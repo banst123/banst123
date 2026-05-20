@@ -93,6 +93,7 @@ function loadSeenAlertIds() {
 function saveSeenAlertIds(set) {
   try {
     fs.writeFileSync(SEEN_FILE, JSON.stringify(Array.from(set), null, 2), "utf8");
+    console.log(`[SEEN] seen_futsal.json 저장: ${Array.from(set).join(", ") || "(empty)"}`);
   } catch (e) {
     console.error("[ERROR] seen_futsal.json 저장 오류:", e.message);
   }
@@ -359,6 +360,7 @@ function runMergeMode() {
 
   // ===== 한 번 알린 조합은 다시 알리지 않기 =====
   const seenIds = loadSeenAlertIds();
+  console.log(`[SEEN] 로드된 alertId 목록: ${Array.from(seenIds).join(", ") || "(none)"}`);
   const newSeen = new Set(seenIds);
 
   const alerts = [];
@@ -375,6 +377,12 @@ function runMergeMode() {
       );
       continue;
     }
+
+    console.log(
+      `[MERGE] 새 알림 대상 조합: ${formatDatePretty(
+        alert.date
+      )} / ${sessionsSorted.join(", ")} / id=${alertId}`
+    );
 
     alerts.push({ ...alert, alertId });
     newSeen.add(alertId);
