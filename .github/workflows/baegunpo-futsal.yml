@@ -1,3 +1,88 @@
+name: 백운포 풋살장 예약 모니터링
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # 15분마다 실행 (원하는 주기로 조정 가능)
+  workflow_dispatch:
+
+jobs:
+  # 1) 구장별 크롤링 (수집 전용)
+  collect-futsal:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        place_index: [0, 1, 2, 3]   # 0=1구장, 1=2구장, 2=3구장, 3=4구장
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 의존성 및 Puppeteer 브라우저 설치
+        run: |
+          npm ci || npm install
+          npx puppeteer browsers install chrome
+
+      - name: 구장별 수집 (collect 모드)
+        env:
+          MODE: collect
+          PLACE_INDEX: ${{ matrix.place_index }}
+        run: node scripts/check-futsal.js
+
+      - name: 수집 결과 아티팩트 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: futsal_results_${{ matrix.place_index }}
+          path: scripts/futsal_results_${{ matrix.place_index }}.json
+
+  # 2) 4개 구장 결과 통합 + 연속 2시간 판정 (merge 모드)
+  merge-futsal:
+    runs-on: ubuntu-latest
+    needs: collect-futsal
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 의존성 설치
+        run: npm ci || npm install
+
+      # 4개 구장 결과 아티팩트 다운로드
+      - name: futsal_results_0 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: futsal_results_0
+          path: scripts
+
+      - name: futsal_results_1 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: futsal_results_1
+          path: scripts
+
+      - name: futsal_results_2 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: futsal_results_2
+          path: scripts
+
+      - name: futsal_results_3 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: futsal_results_3
+          path: scripts
+
+      # 4개 JSON 합쳐서 구장 섞인 연속 2시간 판정 + 중복 알림 방지
       - name: Merge futsal results (구장 조합 검사)
         id: merge_step
         env:
@@ -70,3 +155,11 @@
           req.write(payload);
           req.end();
           EOF
+      # (옵션) 로그에 메시지도 남기기
+      - name: 예약 가능시 로그로 메시지 출력 (테스트용)
+        if: ${{ steps.merge_step.outputs.available == 'true' }}
+        run: |
+          echo "=================================================="
+          echo "📱 실제 발송될 문자/알림 내용:"
+          echo "=================================================="
+          echo "${{ steps.merge_step.outputs.message }}"
