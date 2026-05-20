@@ -1,19 +1,35 @@
 import puppeteer from "puppeteer";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
-// ===== 설정 영역 =====
+// ===== 공통 설정 =====
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const placeNames = ["풋살1구장", "풋살2구장", "풋살3구장", "풋살4구장"];
 const placeParts = ["05", "05", "05", "05"];
-const placeIds   = ["6",  "7",  "8",  "9"]; 
+const placeIds   = ["6",  "7",  "8",  "9"];
 
-// 모니터링 대상 요일: 월(1)~금(5)
-const TARGET_WEEKDAYS = [1, 2, 3, 4, 5];
-const WEEKS_AHEAD = 4;             // 오늘 기준 4주 뒤까지 검사
-
-// GitHub Actions 환경변수에서 지정한 구장 인덱스만 타겟팅 (기본값: 0구장)
+// 환경변수 MODE: collect / merge
+const MODE = process.env.MODE || "collect";
+// collect 모드일 때: PLACE_INDEX로 구장 지정
 const TARGET_PLACE_IDX = parseInt(process.env.PLACE_INDEX || "0", 10);
 const TARGET_PLACE_NAME = placeNames[TARGET_PLACE_IDX];
 
-// ===== 날짜 유틸 =====
+// 결과 JSON 파일 경로 (구장별)
+const RESULT_FILES = [
+  path.join(__dirname, "futsal_results_0.json"),
+  path.join(__dirname, "futsal_results_1.json"),
+  path.join(__dirname, "futsal_results_2.json"),
+  path.join(__dirname, "futsal_results_3.json"),
+];
+
+// 모니터링 대상 요일: 월(1)~금(5)
+const TARGET_WEEKDAYS = [1, 2, 3, 4, 5];
+const WEEKS_AHEAD = 4; // 오늘 기준 4주간
+
+// ===== 공통 날짜 유틸 =====
 function formatDate(d) {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -39,7 +55,7 @@ function getTargetDates() {
   const dates = [];
   const today = new Date();
   const start = new Date(today);
-  start.setDate(start.getDate() + 1); // 내일부터 시작
+  start.setDate(start.getDate() + 1); // 내일부터
 
   const end = new Date(start);
   end.setDate(end.getDate() + WEEKS_AHEAD * 7);
@@ -58,7 +74,7 @@ function buildUrl(date, placeIndex) {
   return `https://www.bnfmc.or.kr/reservation/www/9?facilities_type=T&base_date=${date}&rent_type=1001&center=NAMGUSPORTS02&part=${part}&place=${place}#regist_list`;
 }
 
-// ===== Puppeteer 데이터 검증 로직 =====
+// ===== Puppeteer: 단일 구장/날짜 슬롯 수집 =====
 async function checkPageForSlots(page, url, logPrefix) {
   console.log(`${logPrefix} 🌐 페이지 이동: ${url}`);
   await page.goto(url, {
@@ -151,128 +167,186 @@ async function checkPageForSlots(page, url, logPrefix) {
   return rawSlots.sort((a, b) => sessionOrder[a.session] - sessionOrder[b.session]);
 }
 
-// ===== 메인 프로세스 =====
-async function main() {
+// ===== collect 모드: 한 구장만 크롤링하고 JSON 저장 =====
+async function runCollectMode() {
   const dates = getTargetDates();
-  console.log(`=== Puppeteer 기반 [${TARGET_PLACE_NAME}] 전용 크롤링 시작 ===`);
+  console.log(`=== [COLLECT] Puppeteer 기반 [${TARGET_PLACE_NAME}] 크롤링 시작 (월~금) ===`);
   console.log(`대상 날짜 수: ${dates.length}일 / 타겟 구장: ${TARGET_PLACE_NAME}`);
 
   const browser = await puppeteer.launch({
     headless: "new",
     args: [
-      "--no-sandbox", 
+      "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
-      "--disable-gpu"
+      "--disable-gpu",
     ],
   });
 
   const allDiscoveredResults = [];
-  
-  const allTasks = dates.map(date => ({ date, pIdx: TARGET_PLACE_IDX, name: TARGET_PLACE_NAME }));
 
-  console.log(`총 실행할 쿼리 수: ${allTasks.length}개 (병렬 처리 작동 시작)\n--------------------------------------------------`);
+  const allTasks = dates.map((date) => ({
+    date,
+    pIdx: TARGET_PLACE_IDX,
+    name: TARGET_PLACE_NAME,
+  }));
 
-  const CHUNK_SIZE = 4; 
+  console.log(
+    `총 실행할 쿼리 수: ${allTasks.length}개 (병렬 처리 작동 시작)\n--------------------------------------------------`
+  );
+
+  const CHUNK_SIZE = 4;
   for (let i = 0; i < allTasks.length; i += CHUNK_SIZE) {
     const chunk = allTasks.slice(i, i + CHUNK_SIZE);
-    
-    await Promise.all(chunk.map(async (task) => {
-      const page = await browser.newPage();
-      const prettyDate = formatDatePretty(task.date);
-      const logPrefix = `[${prettyDate} ${task.name}]`;
 
-      try {
-        console.log(`\n[날짜 처리 시작] ${prettyDate} / 타겟 구장: ${TARGET_PLACE_NAME}`);
+    await Promise.all(
+      chunk.map(async (task) => {
+        const page = await browser.newPage();
+        const prettyDate = formatDatePretty(task.date);
+        const logPrefix = `[${prettyDate} ${task.name}]`;
 
-        const url = buildUrl(task.date, task.pIdx);
-        await page.setUserAgent(
-          "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
-        );
+        try {
+          console.log(
+            `\n[날짜 처리 시작] ${prettyDate} / 타겟 구장: ${task.name}`
+          );
 
-        const slots = await checkPageForSlots(page, url, logPrefix);
-        if (slots.length > 0) {
-          console.log(`${logPrefix} ✅ 예약가능 슬롯 ${slots.length}개 수집 완료`);
-          allDiscoveredResults.push({
-            date: task.date,
-            placeIndex: task.pIdx,
-            placeName: task.name,
-            slots, 
-          });
-        } else {
-          console.log(`${logPrefix} ❌ 예약가능 슬롯 없음 (저장 안 함)`);
+          const url = buildUrl(task.date, task.pIdx);
+          await page.setUserAgent(
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
+          );
+
+          const slots = await checkPageForSlots(page, url, logPrefix);
+          if (slots.length > 0) {
+            console.log(
+              `${logPrefix} ✅ 예약가능 슬롯 ${slots.length}개 수집 완료`
+            );
+            allDiscoveredResults.push({
+              date: task.date,
+              placeIndex: task.pIdx,
+              placeName: task.name,
+              slots,
+            });
+          } else {
+            console.log(
+              `${logPrefix} ❌ 예약가능 슬롯 없음 (저장 안 함)`
+            );
+          }
+        } catch (e) {
+          console.error(
+            `${logPrefix} 🚨 크롤링 중 에러 발생:`,
+            e.message
+          );
+        } finally {
+          await page.close();
         }
-      } catch (e) {
-        console.error(`${logPrefix} 🚨 크롤링 중 에러 발생:`, e.message);
-      } finally {
-        await page.close();
-      }
-    }));
-    
-    console.log(`-------------------------------------------------- [진행률: ${Math.min(i + CHUNK_SIZE, allTasks.length)} / ${allTasks.length} 완료]`);
+      })
+    );
+
+    console.log(
+      `-------------------------------------------------- [진행률: ${Math.min(
+        i + CHUNK_SIZE,
+        allTasks.length
+      )} / ${allTasks.length} 완료]`
+    );
   }
 
   await browser.close();
 
-  // ===== 2차 필터링: 날짜 기준으로, 구장 합산 후 연속 2시간 검사 =====
-  const alerts = [];
+  // 결과 JSON 저장 (구장별)
+  const outPath = RESULT_FILES[TARGET_PLACE_IDX];
+  fs.writeFileSync(
+    outPath,
+    JSON.stringify(allDiscoveredResults, null, 2),
+    "utf8"
+  );
+  console.log(`📁 [COLLECT] 결과 저장 완료: ${outPath}`);
 
-  // 1) 날짜별 그룹핑
-  const groupedByDate = new Map(); // key: date, value: { date, items: [res...] }
+  // collect 모드에서는 GitHub Output을 건드리지 않음 (최종 판정은 merge 모드에서)
+}
 
-  for (const res of allDiscoveredResults) {
+// ===== merge 모드: 4개 JSON 합쳐서 구장 혼합 연속 2시간 판정 =====
+function runMergeMode() {
+  console.log("=== [MERGE] 4개 구장 결과 통합 및 연속 2시간 판정 시작 ===");
+
+  const allResults = [];
+
+  RESULT_FILES.forEach((file, idx) => {
+    if (!fs.existsSync(file)) {
+      console.warn(`⚠️ 결과 파일 없음 (구장 ${idx}): ${file}`);
+      return;
+    }
+    try {
+      const raw = fs.readFileSync(file, "utf8");
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        allResults.push(...arr);
+      } else {
+        console.warn(`⚠️ 결과 파일 포맷 이상 (구장 ${idx}): ${file}`);
+      }
+    } catch (e) {
+      console.error(`❌ 결과 파일 파싱 실패 (구장 ${idx}): ${file}`, e.message);
+    }
+  });
+
+  console.log(
+    `📊 통합 대상 데이터 수: ${allResults.length}개 (날짜×구장 단위)`
+  );
+
+  // 날짜별 그룹핑
+  const groupedByDate = new Map();
+
+  for (const res of allResults) {
     if (!groupedByDate.has(res.date)) {
       groupedByDate.set(res.date, { date: res.date, items: [] });
     }
     groupedByDate.get(res.date).items.push(res);
   }
 
-  // 2) 각 날짜에 대해, 모든 구장의 회차를 합쳐서 연속성 검사
+  const alerts = [];
+
   for (const { date, items } of groupedByDate.values()) {
-    const allSlots = items.flatMap(it =>
-      it.slots.map(s => ({
+    const allSlots = items.flatMap((it) =>
+      (it.slots || []).map((s) => ({
         ...s,
         placeIndex: it.placeIndex,
         placeName: it.placeName,
       }))
     );
 
+    const prettyDate = formatDatePretty(date);
+
     if (allSlots.length === 0) {
-      const prettyDate = formatDatePretty(date);
       console.log(`[연속검사] ${prettyDate} - 슬롯 없음`);
       continue;
     }
 
-    const allSessions = allSlots.map(s => s.session);
+    const allSessions = allSlots.map((s) => s.session);
     const hasContinuousSlots =
       (allSessions.includes("14회") && allSessions.includes("15회")) ||
       (allSessions.includes("15회") && allSessions.includes("16회"));
 
-    const prettyDate = formatDatePretty(date);
     console.log(
-      `[연속검사] ${prettyDate} - 세션: ${allSessions.join(", ") || "없음"} / 연속 여부: ${hasContinuousSlots}`
+      `[연속검사] ${prettyDate} - 세션: ${
+        allSessions.join(", ") || "없음"
+      } / 연속 여부: ${hasContinuousSlots}`
     );
 
     if (!hasContinuousSlots) continue;
 
-    alerts.push({
-      date,
-      items, // [{ date, placeIndex, placeName, slots }, ...]
-    });
+    alerts.push({ date, items });
   }
 
-  // ===== 결과 출력 및 GitHub Output 환경변수 전달 =====
   let available = false;
   let message = "";
 
   if (alerts.length > 0) {
     available = true;
     alerts.sort((a, b) => a.date.localeCompare(b.date));
-    
+
     const lines = [
       "▣ 백운포 풋살장 예약 가능 알림 (구장 혼합 포함, 연속 2시간 확보) ▣",
       "[문자 발송 대상 타임 목록]",
-      ""
+      "",
     ];
 
     for (const alert of alerts) {
@@ -297,19 +371,30 @@ async function main() {
   }
 
   console.log("\n==================================================");
-  console.log("📬 최종 알림 내역 요약 - 문자 발송용");
+  console.log("📬 [MERGE] 최종 알림 내역 요약 - 문자 발송용");
   console.log("==================================================");
   console.log(message);
 
   const ghOutput = process.env.GITHUB_OUTPUT;
   if (ghOutput) {
-    const fs = await import("fs");
     fs.appendFileSync(ghOutput, `available=${available}\n`);
     fs.appendFileSync(ghOutput, `message<<EOF\n${message}\nEOF\n`);
   }
 }
 
-main().catch((e) => {
-  console.error(`🚨 [${TARGET_PLACE_NAME}] 모니터링 최종 실패:`, e);
+// ===== 엔트리 포인트 =====
+(async () => {
+  if (MODE === "collect") {
+    await runCollectMode();
+  } else if (MODE === "merge") {
+    runMergeMode();
+  } else {
+    console.error(
+      `❌ MODE 값이 올바르지 않습니다. (현재: ${MODE}, 허용: collect | merge)`
+    );
+    process.exit(1);
+  }
+})().catch((e) => {
+  console.error("🚨 check-futsal.js 실행 중 에러:", e);
   process.exit(1);
 });
