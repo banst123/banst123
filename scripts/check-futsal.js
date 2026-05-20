@@ -25,8 +25,8 @@ const RESULT_FILES = [
   path.join(__dirname, "futsal_results_3.json"),
 ];
 
-// “이미 알림 보낸 조합” 기록용 파일
-const SEEN_FILE = path.join(__dirname, "seen_futsal.json");
+// “이미 알림 보낸 조합” 기록용 파일 (scripts 폴더에서 상위 폴더인 루트로 이동)
+const SEEN_FILE = path.join(__dirname, "..", "seen_futsal.json");
 
 // 모니터링 대상 요일: 월(1)~금(5)
 const TARGET_WEEKDAYS = [1, 2, 3, 4, 5];
