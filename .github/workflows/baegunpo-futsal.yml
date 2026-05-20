@@ -2,7 +2,7 @@ name: 백운포 풋살장 예약 모니터링
 
 on:
   schedule:
-    - cron: '*/15 * * * *'   # 15분마다 (원하면 조정)
+    - cron: '*/15 * * * *'   # 15분마다
   workflow_dispatch:
 
 jobs:
@@ -44,6 +44,7 @@ jobs:
   merge-futsal:
     runs-on: ubuntu-latest
     needs: collect-futsal
+
     steps:
       - name: 코드 체크아웃
         uses: actions/checkout@v4
@@ -90,17 +91,61 @@ jobs:
           echo "GITHUB_OUTPUT=$GITHUB_OUTPUT" >> $GITHUB_ENV
           node scripts/check-futsal.js
 
-      # (선택) 실제 텔레그램/문자 발송 스텝을 여기 추가
-      # 예: 텔레그램
-      # - name: 예약 가능시 텔레그램 발송
-      #   if: ${{ steps.merge_step.outputs.available == 'true' }}
-      #   env:
-      #     TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      #     TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      #     FUTSAL_MESSAGE: ${{ steps.merge_step.outputs.message }}
-      #   run: |
-      #     node scripts/send-telegram.js
+      # 텔레그램 발송 (실제 알림)
+      - name: 예약 가능시 텔레그램 발송
+        if: ${{ steps.merge_step.outputs.available == 'true' }}
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FUTSAL_MESSAGE: ${{ steps.merge_step.outputs.message }}
+        run: |
+          node - << 'EOF'
+          const https = require('https');
 
+          const token = process.env.TELEGRAM_TOKEN;
+          const chatId = process.env.TELEGRAM_CHAT_ID;
+          const text = process.env.FUTSAL_MESSAGE || '';
+
+          if (!token || !chatId) {
+            console.error('TELEGRAM_TOKEN 또는 TELEGRAM_CHAT_ID 누락');
+            process.exit(1);
+          }
+
+          const payload = JSON.stringify({
+            chat_id: chatId,
+            text,
+            parse_mode: 'HTML',
+            disable_web_page_preview: true,
+          });
+
+          const options = {
+            hostname: 'api.telegram.org',
+            path: `/bot${token}/sendMessage`,
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Content-Length': Buffer.byteLength(payload),
+            },
+          };
+
+          const req = https.request(options, (res) => {
+            let data = '';
+            res.on('data', (chunk) => (data += chunk));
+            res.on('end', () => {
+              console.log('텔레그램 응답:', data);
+            });
+          });
+
+          req.on('error', (err) => {
+            console.error('텔레그램 요청 실패:', err);
+            process.exit(1);
+          });
+
+          req.write(payload);
+          req.end();
+          EOF
+
+      # (옵션) 로그에 메시지도 남기기
       - name: 예약 가능시 로그로 메시지 출력 (테스트용)
         if: ${{ steps.merge_step.outputs.available == 'true' }}
         run: |
