@@ -1,8 +1,8 @@
-name: 백운포 풋살장 예약 모니터링
+Name: 백운포 풋살장 예약 모니터링
 
 on:
   schedule:
-    - cron: '*/15 * * * *'   # 15분마다 실행 (원하는 주기로 조정 가능)
+    - cron: '*/15 * * * *'   # 15분마다 실행
   workflow_dispatch:
 
 jobs:
@@ -18,15 +18,27 @@ jobs:
       - name: 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Node.js 설정
+      - name: Node.js 설정 (npm 캐시 활성화)
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
-      - name: 의존성 및 Puppeteer 브라우저 설치
-        run: |
-          npm ci || npm install
-          npx puppeteer browsers install chrome
+      # ⚡ Puppeteer 브라우저 바이너리 전용 캐시 설정
+      - name: Cache Puppeteer Chrome
+        id: cache-puppeteer
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/puppeteer
+          key: ${{ runner.os }}-puppeteer-${{ hashFiles('package-lock.json') }}
+
+      - name: 의존성 설치
+        run: npm ci || npm install
+
+      # ⚡ 캐시 미스(Cache Miss) 시에만 Chrome 브라우저 설치
+      - name: Puppeteer 브라우저 설치
+        if: steps.cache-puppeteer.outputs.cache-hit != 'true'
+        run: npx puppeteer browsers install chrome
 
       - name: 구장별 수집 (collect 모드)
         env:
@@ -49,10 +61,11 @@ jobs:
       - name: 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Node.js 설정
+      - name: Node.js 설정 (npm 캐시 활성화)
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
       - name: 의존성 설치
         run: npm ci || npm install
@@ -155,7 +168,7 @@ jobs:
           req.write(payload);
           req.end();
           EOF
-      # (옵션) 로그에 메시지도 남기기
+
       - name: 예약 가능시 로그로 메시지 출력 (테스트용)
         if: ${{ steps.merge_step.outputs.available == 'true' }}
         run: |
@@ -163,7 +176,8 @@ jobs:
           echo "📱 실제 발송될 문자/알림 내용:"
           echo "=================================================="
           echo "${{ steps.merge_step.outputs.message }}"
-      - name: seen_futsal.json 변경사항 커밋/푸시   # ← 이거 추가
+
+      - name: seen_futsal.json 변경사항 커밋/푸시
         if: ${{ steps.merge_step.outputs.available == 'true' }}
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
